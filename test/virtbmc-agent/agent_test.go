@@ -8,6 +8,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
+	kubevirtv1 "kubevirt.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
@@ -215,6 +216,68 @@ var _ = Describe("Agent e2e", Ordered, func() {
 					map[int]uint{0: 3},       // interface=3
 				)
 			})
+		})
+	})
+
+	Context("BMC information", func() {
+		It("should return the correct System GUID matching the VM UID", func() {
+			var vm kubevirtv1.VirtualMachine
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: agentVMName}, &vm)).To(Succeed())
+			vmUID := string(vm.UID)
+
+			out, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("mc", "guid"))
+			Expect(err).NotTo(HaveOccurred())
+
+			// ipmitool output format: "System GUID   : xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+			Expect(out).To(ContainSubstring("System GUID"))
+			// Extract the GUID portion and compare with the VM UID.
+			lines := strings.Split(out, "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(strings.TrimSpace(line), "System GUID") {
+					parts := strings.SplitN(line, ":", 2)
+					guid := strings.TrimSpace(parts[1])
+					Expect(guid).To(Equal(vmUID),
+						"System GUID must match the VM UID")
+					return
+				}
+			}
+			Fail("System GUID line not found in ipmitool output")
+		})
+
+		It("should return valid GUID encoding information", func() {
+			out, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("mc", "guid"))
+			Expect(err).NotTo(HaveOccurred())
+
+			// GUID Encoding must be IPMI (not SMBIOS with warning).
+			Expect(out).To(ContainSubstring("GUID Encoding"))
+			Expect(out).To(ContainSubstring("IPMI"))
+			Expect(out).NotTo(ContainSubstring("SMBIOS"))
+			Expect(out).NotTo(ContainSubstring("violation"))
+		})
+
+		It("should return FRU inventory data", func() {
+			out, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("fru", "list"))
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify all expected FRU fields are present.
+			Expect(out).To(ContainSubstring("FRU Device Description"))
+			Expect(out).To(ContainSubstring("Product Manufacturer"))
+			Expect(out).To(ContainSubstring("KubeVirt"))
+			Expect(out).To(ContainSubstring("Product Name"))
+			Expect(out).To(ContainSubstring("KubeVirtBMC"))
+			Expect(out).To(ContainSubstring("Product Version"))
+			Expect(out).To(ContainSubstring("Product Serial"))
+		})
+
+		It("should include the VM UUID as the FRU serial", func() {
+			var vm kubevirtv1.VirtualMachine
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: agentVMName}, &vm)).To(Succeed())
+			vmUID := string(vm.UID)
+
+			out, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("fru", "list"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(out).To(ContainSubstring(vmUID),
+				"FRU Product Serial must match the VM UID")
 		})
 	})
 

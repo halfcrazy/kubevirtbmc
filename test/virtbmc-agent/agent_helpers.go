@@ -27,7 +27,7 @@ const (
 	agentBMCName         = "test-bmc"
 	agentSecretName      = "bmc-credentials-secret"
 	curlImage            = "curlimages/curl:latest"
-	ipmitoolImage        = "mikeynap/ipmitool:latest"
+	ipmitoolImage        = "ghcr.io/halfcrazy/ipmitool:eecd64f"
 	agentTestTimeout     = 60 * time.Second
 	agentTestInterval    = 250 * time.Millisecond
 	agentPodName         = "testvm-virtbmc"

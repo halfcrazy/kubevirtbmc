@@ -25,6 +25,7 @@ type Options struct {
 	BMCUser        string
 	BMCPassword    string
 	EnableIPMI     bool
+	AppVersion     string
 }
 
 type VirtBMC struct {
@@ -52,7 +53,7 @@ func NewVirtBMC(ctx context.Context, options Options, inCluster bool) (*VirtBMC,
 
 	var ipmiSimulator *ipmi.Simulator
 	if options.EnableIPMI {
-		ipmiSimulator = ipmi.NewSimulator(options.Address, options.IPMIPort, resourceManager, options.BMCUser, options.BMCPassword)
+		ipmiSimulator = ipmi.NewSimulator(options.Address, options.IPMIPort, resourceManager, options.BMCUser, options.BMCPassword, options.AppVersion)
 	}
 
 	return &VirtBMC{
@@ -83,7 +84,6 @@ func (b *VirtBMC) Run() error {
 		if err := b.ipmiSimulator.Run(); err != nil {
 			return fmt.Errorf("unable to run the ipmi simulator: %v", err)
 		}
-		logrus.Infof("IPMI service listens on %s:%d", b.address, b.ipmiPort)
 	}
 
 	// Start the Redfish emulator

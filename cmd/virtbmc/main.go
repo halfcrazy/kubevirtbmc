@@ -79,6 +79,7 @@ func main() {
 
 			ctx := context.WithValue(cCtx.Context, virtbmc.VMNamespaceKey{}, cCtx.Args().Get(0))
 			ctx = context.WithValue(ctx, virtbmc.VMNameKey{}, cCtx.Args().Get(1))
+			options.AppVersion = AppVersion
 			return run(ctx, options)
 		},
 	}
