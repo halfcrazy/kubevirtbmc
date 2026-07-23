@@ -8,9 +8,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/client-go/kubernetes"
+	kubevirtv1 "kubevirt.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kubevirtv1 "kubevirt.io/api/core/v1"
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
 	"kubevirt.io/kubevirtbmc/pkg/util"
 	testutil "kubevirt.io/kubevirtbmc/test/util"
@@ -39,8 +39,8 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 		clientset, err := kubernetes.NewForConfig(config)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(CreateIPMIToolPod(ctx, clientset, ns)).To(Succeed())
-		Expect(CreateRedfishClientPod(ctx, clientset, ns)).To(Succeed())
+		Expect(testutil.CreateIPMIToolPod(ctx, clientset, ns)).To(Succeed())
+		Expect(testutil.CreateRedfishClientPod(ctx, clientset, ns)).To(Succeed())
 	})
 
 	ipmiReq := func(args ...string) IPMIRequest {
@@ -74,7 +74,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 	Context("IPMI enable/disable toggle", func() {
 		It("should start with IPMI disabled by default, verify failure, then enable", func() {
 			By("verifying IPMI commands fail when disabled by default")
-			_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "status"))
+			_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "status"))
 			Expect(err).To(HaveOccurred(), "IPMI command should fail when IPMI is disabled")
 
 			By("recording the current pod UID before enabling IPMI")
@@ -94,7 +94,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 			By("creating a new Redfish session for the restarted pod")
 			Eventually(func() error {
-				authToken, err = CreateRedfishSession(ctx, config, ns, env.RedfishBaseURL, env.Username, env.Password)
+				authToken, err = testutil.CreateRedfishSession(ctx, config, ns, env.RedfishBaseURL, env.Username, env.Password)
 				return err
 			}, agentTestTimeout, agentTestInterval).Should(Succeed())
 			Expect(authToken).NotTo(BeEmpty())
@@ -104,7 +104,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 	Context("IPMI operations", func() {
 		Context("Authentication", func() {
 			It("should accept commands with correct username and password", func() {
-				out, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "status"))
+				out, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "status"))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(SatisfyAny(
 					ContainSubstring("Chassis Power is on"),
@@ -115,7 +115,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			It("should reject commands with wrong password", func() {
 				wrongReq := ipmiReq("power", "status")
 				wrongReq.Password = "wrongpass"
-				_, stderr, err := runIPMIInCluster(ctx, config, ns, wrongReq)
+				_, stderr, err := testutil.RunIPMIInCluster(ctx, config, ns, wrongReq)
 				Expect(err).To(HaveOccurred(), "IPMI command with wrong password should be rejected")
 				Expect(stderr).To(ContainSubstring("Unable to establish IPMI v2 / RMCP+ session"))
 			})
@@ -123,7 +123,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			It("should reject commands with wrong username", func() {
 				wrongReq := ipmiReq("power", "status")
 				wrongReq.Username = "baduser"
-				_, stderr, err := runIPMIInCluster(ctx, config, ns, wrongReq)
+				_, stderr, err := testutil.RunIPMIInCluster(ctx, config, ns, wrongReq)
 				Expect(err).To(HaveOccurred(), "IPMI command with wrong username should be rejected")
 				Expect(stderr).To(ContainSubstring("Unable to establish IPMI v2 / RMCP+ session"))
 			})
@@ -135,7 +135,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				func(iface string) {
 					req := ipmiReq("power", "status")
 					req.Interface = iface
-					out, _, err := runIPMIInCluster(ctx, config, ns, req)
+					out, _, err := testutil.RunIPMIInCluster(ctx, config, ns, req)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(out).To(SatisfyAny(
 						ContainSubstring("Chassis Power is on"),
@@ -150,7 +150,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				func(iface string) {
 					req := ipmiReq("raw", "0x00", "0x08", "0x03", "0x08")
 					req.Interface = iface
-					_, _, err := runIPMIInCluster(ctx, config, ns, req)
+					_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, req)
 					Expect(err).NotTo(HaveOccurred())
 				},
 				Entry("via lan", "lan"),
@@ -162,7 +162,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 					req := ipmiReq("power", "status")
 					req.Interface = iface
 					req.RetryCount = 1
-					_, _, elapsed, err := runIPMIInClusterTimed(ctx, config, ns, req)
+					_, _, elapsed, err := testutil.RunIPMIInClusterTimed(ctx, config, ns, req)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(elapsed).To(BeNumerically("<", time.Second),
 						"%s power status with -R 1 should return within 1s, took %v", iface, elapsed)
@@ -174,7 +174,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 		Context("Power management", func() {
 			It("should report power status", func() {
-				out, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "status"))
+				out, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "status"))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(SatisfyAny(
 					ContainSubstring("Chassis Power is on"),
@@ -183,37 +183,37 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			})
 
 			It("should accept power off and VM is actually off", func() {
-				_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "off"))
+				_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "off"))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIDeleted(ctx, k8sClient, ns)
 			})
 
 			It("should accept power on and VM is actually running", func() {
-				_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
+				_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIRunning(ctx, k8sClient, ns)
 			})
 
 			It("should accept power cycle and VM is stopped then started again", func() {
-				_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "cycle"))
+				_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "cycle"))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIPowerCycle(ctx, k8sClient, ns)
 			})
 
 			It("should accept power soft (graceful ACPI shutdown) and VM is actually off", func() {
-				_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "soft"))
+				_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "soft"))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIDeleted(ctx, k8sClient, ns)
 			})
 
 			It("should accept power on and VM is actually running", func() {
-				_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
+				_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIRunning(ctx, k8sClient, ns)
 			})
 
 			It("should accept power reset (hard reset) and VM is stopped then started again", func() {
-				_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "reset"))
+				_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "reset"))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIPowerCycle(ctx, k8sClient, ns)
 			})
@@ -223,22 +223,22 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				// before VM.Status.Ready flips. Reset in that window must
 				// Restart, not fall back to PowerOn (Always would swallow it).
 				waitForVMIRunning(ctx, k8sClient, ns)
-				_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "soft"))
+				_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "soft"))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIDeleted(ctx, k8sClient, ns)
 
-				_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
+				_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIPresentBeforeReady(ctx, k8sClient, ns)
 
-				_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("power", "reset"))
+				_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "reset"))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIPowerCycle(ctx, k8sClient, ns)
 			})
 
 			It("should return retryable error when power-on races with VMI cleanup", func() {
 				waitForVMIRunning(ctx, k8sClient, ns)
-				_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "soft"))
+				_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "soft"))
 				Expect(err).NotTo(HaveOccurred())
 
 				// Power on again before VMI cleanup completes: while the VMI
@@ -246,7 +246,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				// succeeds once the VMI is gone.
 				var sawNodeBusy bool
 				Eventually(func() error {
-					_, stderr, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
+					_, stderr, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
 					if err != nil {
 						sawNodeBusy = true
 						Expect(stderr).To(ContainSubstring("Node busy"),
@@ -263,16 +263,16 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 			It("should treat repeated power-on as idempotent during VM startup", func() {
 				waitForVMIRunning(ctx, k8sClient, ns)
-				_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "soft"))
+				_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "soft"))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIDeleted(ctx, k8sClient, ns)
 
 				// The second power-on may arrive before the VMI is Ready;
 				// with RunStrategyAlways idempotency it must succeed, not
 				// return Node Busy.
-				_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
+				_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
 				Expect(err).NotTo(HaveOccurred())
-				_, stderr, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
+				_, stderr, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
 				Expect(err).NotTo(HaveOccurred(),
 					"repeated power-on should succeed; stderr=%q", stderr)
 
@@ -281,7 +281,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 			It("should treat repeated power-on as idempotent for Manual runStrategy", func() {
 				waitForVMIRunning(ctx, k8sClient, ns)
-				_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "soft"))
+				_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "soft"))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIDeleted(ctx, k8sClient, ns)
 
@@ -290,9 +290,9 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				setVMRunStrategy(ctx, k8sClient, ns, kubevirtv1.RunStrategyManual)
 				defer setVMRunStrategy(ctx, k8sClient, ns, kubevirtv1.RunStrategyAlways)
 
-				_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
+				_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
 				Expect(err).NotTo(HaveOccurred())
-				_, stderr, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
+				_, stderr, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
 				Expect(err).NotTo(HaveOccurred(),
 					"repeated Manual power-on should succeed; stderr=%q", stderr)
 
@@ -301,12 +301,12 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 			It("should treat repeated power-off as idempotent", func() {
 				waitForVMIRunning(ctx, k8sClient, ns)
-				_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "off"))
+				_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "off"))
 				Expect(err).NotTo(HaveOccurred())
 
 				// Second power-off while VMI is being torn down should
 				// succeed idempotently.
-				_, stderr, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "off"))
+				_, stderr, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "off"))
 				Expect(err).NotTo(HaveOccurred(),
 					"repeated power-off should succeed; stderr=%q", stderr)
 
@@ -317,10 +317,10 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				// KubeVirt allows Stop to interrupt a pending/starting VMI, so this
 				// should succeed (unlike soft→on, which returns Node busy).
 				waitForVMIDeleted(ctx, k8sClient, ns)
-				_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
+				_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
 				Expect(err).NotTo(HaveOccurred())
 
-				_, stderr, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "soft"))
+				_, stderr, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "soft"))
 				Expect(err).NotTo(HaveOccurred(),
 					"power soft after power on should succeed; stderr=%q", stderr)
 
@@ -334,7 +334,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			})
 
 			It("should set boot device to PXE", func() {
-				out, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe"))
+				out, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe"))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(SatisfyAny(
 					ContainSubstring("Set Boot Device"),
@@ -349,7 +349,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			})
 
 			It("should set boot device to disk", func() {
-				out, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "disk"))
+				out, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "disk"))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(SatisfyAny(
 					ContainSubstring("Set Boot Device"),
@@ -364,7 +364,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			})
 
 			It("should set boot device to cdrom", func() {
-				out, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "cdrom"))
+				out, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "cdrom"))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(SatisfyAny(
 					ContainSubstring("Set Boot Device"),
@@ -380,7 +380,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 			Context("oneshot boot order", func() {
 				It("should save boot override status on oneshot PXE", func() {
-					_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe"))
+					_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe"))
 					Expect(err).NotTo(HaveOccurred())
 					// PXE: interfaces first, then regular disks, then cdroms
 					verifyVMBootOrder(ctx, k8sClient, ns,
@@ -392,7 +392,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				})
 
 				It("should save persistent override marker on persistent PXE", func() {
-					_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe", "options=persistent"))
+					_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe", "options=persistent"))
 					Expect(err).NotTo(HaveOccurred())
 					verifyVMBootOrder(ctx, k8sClient, ns,
 						map[int]uint{0: 2, 1: 3},
@@ -404,7 +404,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 				It("should cancel oneshot override with bootdev none", func() {
 					By("setting oneshot PXE first")
-					_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe"))
+					_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe"))
 					Expect(err).NotTo(HaveOccurred())
 					verifyVMBootOrder(ctx, k8sClient, ns,
 						map[int]uint{0: 2, 1: 3},
@@ -413,7 +413,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 					verifyBMCBootOverride(ctx, k8sClient, ns, true)
 
 					By("cancelling with bootdev none")
-					_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "none"))
+					_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "none"))
 					Expect(err).NotTo(HaveOccurred())
 
 					By("verifying original boot order restored and backup removed")
@@ -432,7 +432,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 					addEmptyDiskWithBootOrder(ctx, k8sClient, ns, issue191RemovedDisk, 7)
 
 					By("setting oneshot PXE")
-					_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe"))
+					_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe"))
 					Expect(err).NotTo(HaveOccurred())
 					verifyVMNamedBootOrders(ctx, k8sClient, ns,
 						map[string]*uint{
@@ -459,12 +459,12 @@ var _ = Describe("Agent e2e", Ordered, func() {
 					)
 
 					By("powering off the VM")
-					_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("power", "off"))
+					_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "off"))
 					Expect(err).NotTo(HaveOccurred())
 					waitForVMIDeleted(ctx, k8sClient, ns)
 
 					By("powering on the VM to consume the oneshot backup")
-					_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
+					_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
 					Expect(err).NotTo(HaveOccurred())
 					waitForVMIRunning(ctx, k8sClient, ns)
 
@@ -481,7 +481,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				})
 
 				It("should set EFI firmware template on running VM", func() {
-					_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe", "options=efiboot"))
+					_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe", "options=efiboot"))
 					Expect(err).NotTo(HaveOccurred())
 					verifyVMBootOrder(ctx, k8sClient, ns,
 						map[int]uint{0: 2, 1: 3},
@@ -494,12 +494,12 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 				It("should set EFI firmware on stopped VM", func() {
 					By("stopping the VM")
-					_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "off"))
+					_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "off"))
 					Expect(err).NotTo(HaveOccurred())
 					waitForVMIDeleted(ctx, k8sClient, ns)
 
 					By("setting EFI firmware")
-					_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "disk", "options=persistent,efiboot"))
+					_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "disk", "options=persistent,efiboot"))
 					Expect(err).NotTo(HaveOccurred())
 					verifyVMBootOrder(ctx, k8sClient, ns,
 						map[int]uint{0: 1, 1: 3},
@@ -510,14 +510,14 @@ var _ = Describe("Agent e2e", Ordered, func() {
 					verifyBMCBootOverrideMode(ctx, k8sClient, ns, bmcv1.BootOverrideModePersistent)
 
 					By("restarting the VM")
-					_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
+					_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
 					Expect(err).NotTo(HaveOccurred())
 					waitForVMIRunning(ctx, k8sClient, ns)
 				})
 
 				It("should restore original boot order after multiple oneshot overrides before reboot", func() {
 					By("setting first oneshot to PXE")
-					_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe"))
+					_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe"))
 					Expect(err).NotTo(HaveOccurred())
 					verifyVMBootOrder(ctx, k8sClient, ns,
 						map[int]uint{0: 2, 1: 3},
@@ -526,7 +526,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 					verifyBMCBootOverride(ctx, k8sClient, ns, true)
 
 					By("setting second oneshot to cdrom before reboot")
-					_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "cdrom"))
+					_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "cdrom"))
 					Expect(err).NotTo(HaveOccurred())
 					verifyVMBootOrder(ctx, k8sClient, ns,
 						map[int]uint{0: 2, 1: 1},
@@ -535,12 +535,12 @@ var _ = Describe("Agent e2e", Ordered, func() {
 					verifyBMCBootOverride(ctx, k8sClient, ns, true)
 
 					By("powering off the VM")
-					_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("power", "off"))
+					_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "off"))
 					Expect(err).NotTo(HaveOccurred())
 					waitForVMIDeleted(ctx, k8sClient, ns)
 
 					By("powering on the VM to consume the oneshot")
-					_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
+					_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
 					Expect(err).NotTo(HaveOccurred())
 					waitForVMIRunning(ctx, k8sClient, ns)
 
@@ -552,7 +552,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 					verifyBMCBootOverride(ctx, k8sClient, ns, false)
 
 					By("power cycling to get a clean VMI from the current template")
-					_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "power", "cycle"))
+					_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "power", "cycle"))
 					Expect(err).NotTo(HaveOccurred())
 					waitForVMIPowerCycle(ctx, k8sClient, ns)
 
@@ -560,7 +560,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 					waitForGuestAgent(ctx, k8sClient, ns)
 
 					By("setting oneshot HDD")
-					_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "disk"))
+					_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "disk"))
 					Expect(err).NotTo(HaveOccurred())
 					verifyVMBootOrder(ctx, k8sClient, ns,
 						map[int]uint{0: 1, 1: 3},
@@ -585,7 +585,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 				It("should consume oneshot after guest OS reboot on a VM with rebootPolicy=Terminate", Label("Slow"), func() {
 					By("power cycling to get a clean VMI from the current template")
-					_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "power", "cycle"))
+					_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "power", "cycle"))
 					Expect(err).NotTo(HaveOccurred())
 					waitForVMIPowerCycle(ctx, k8sClient, ns)
 
@@ -593,7 +593,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 					waitForGuestAgent(ctx, k8sClient, ns)
 
 					By("setting oneshot HDD")
-					_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "disk"))
+					_, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "disk"))
 					Expect(err).NotTo(HaveOccurred())
 					verifyVMBootOrder(ctx, k8sClient, ns,
 						map[int]uint{0: 1, 1: 3},
@@ -620,11 +620,11 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			Context("bootparam get 5", func() {
 				It("should read back oneshot PXE boot flags", func() {
 					By("setting oneshot PXE")
-					_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe"))
+					_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe"))
 					Expect(err).NotTo(HaveOccurred())
 
 					By("reading back boot flags")
-					out, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootparam", "get", "5"))
+					out, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootparam", "get", "5"))
 					Expect(err).NotTo(HaveOccurred())
 					Expect(out).To(And(
 						ContainSubstring("Boot Flag Valid"),
@@ -635,11 +635,11 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 				It("should read back persistent HDD boot flags", func() {
 					By("setting persistent disk")
-					_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "disk", "options=persistent"))
+					_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "disk", "options=persistent"))
 					Expect(err).NotTo(HaveOccurred())
 
 					By("reading back boot flags")
-					out, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootparam", "get", "5"))
+					out, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootparam", "get", "5"))
 					Expect(err).NotTo(HaveOccurred())
 					Expect(out).To(And(
 						ContainSubstring("Boot Flag Valid"),
@@ -650,11 +650,11 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 				It("should read back EFI oneshot CD boot flags", func() {
 					By("setting EFI oneshot CD")
-					_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "cdrom", "options=efiboot"))
+					_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "cdrom", "options=efiboot"))
 					Expect(err).NotTo(HaveOccurred())
 
 					By("reading back boot flags")
-					out, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootparam", "get", "5"))
+					out, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootparam", "get", "5"))
 					Expect(err).NotTo(HaveOccurred())
 					Expect(out).To(And(
 						ContainSubstring("Boot Flag Valid"),
@@ -666,11 +666,11 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 				It("should read back persistent EFI PXE boot flags", func() {
 					By("setting persistent EFI PXE")
-					_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe", "options=persistent,efiboot"))
+					_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe", "options=persistent,efiboot"))
 					Expect(err).NotTo(HaveOccurred())
 
 					By("reading back boot flags")
-					out, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootparam", "get", "5"))
+					out, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootparam", "get", "5"))
 					Expect(err).NotTo(HaveOccurred())
 					Expect(out).To(And(
 						ContainSubstring("Boot Flag Valid"),
@@ -682,7 +682,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 				It("should survive agent pod restart and persist boot flags", func() {
 					By("setting persistent PXE as a known state")
-					_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe", "options=persistent"))
+					_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "pxe", "options=persistent"))
 					Expect(err).NotTo(HaveOccurred())
 
 					By("recording the current agent pod UID")
@@ -698,7 +698,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 					Eventually(testutil.PodRunningAndReadyWithNewUID(ctx, k8sClient, ns, podBefore.UID), agentTestTimeout, agentTestInterval).Should(BeTrue(), "new agent pod should become ready")
 
 					By("verifying bootparam get 5 returns correct state from CR status after restart")
-					out, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootparam", "get", "5"))
+					out, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootparam", "get", "5"))
 					Expect(err).NotTo(HaveOccurred())
 					Expect(out).To(And(
 						ContainSubstring("Boot Flag Valid"),
@@ -708,13 +708,13 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 					By("re-creating Redfish session for restarted pod")
 					Eventually(func() error {
-						authToken, err = CreateRedfishSession(ctx, config, ns, env.RedfishBaseURL, env.Username, env.Password)
+						authToken, err = testutil.CreateRedfishSession(ctx, config, ns, env.RedfishBaseURL, env.Username, env.Password)
 						return err
 					}, agentTestTimeout, agentTestInterval).Should(Succeed())
 					Expect(authToken).NotTo(BeEmpty())
 
 					By("verifying Redfish GET also returns correct boot state after restart")
-					out2, err := runCurlRedfish(ctx, config, ns, redfishSession("GET", "/Systems/1", ""))
+					out2, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("GET", "/Systems/1", ""))
 					Expect(err).NotTo(HaveOccurred())
 					Expect(out2).To(And(
 						ContainSubstring(`"BootSourceOverrideTarget":"Pxe"`),
@@ -728,13 +728,13 @@ var _ = Describe("Agent e2e", Ordered, func() {
 	Context("Redfish operations", func() {
 		Context("Authentication", func() {
 			It("should allow access with basic auth", func() {
-				out, err := runCurlRedfish(ctx, config, ns, redfishBasic("GET", "/Systems/1", ""))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishBasic("GET", "/Systems/1", ""))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(ContainSubstring(`"@odata.id":"/redfish/v1/Systems/1"`))
 			})
 
 			It("should reject access with wrong password", func() {
-				out, err := runCurlRedfish(ctx, config, ns, RedfishRequest{
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, RedfishRequest{
 					BaseURL:  env.RedfishBaseURL,
 					Method:   "GET",
 					Path:     "/Systems/1",
@@ -749,7 +749,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			})
 
 			It("should reject access with wrong username", func() {
-				out, err := runCurlRedfish(ctx, config, ns, RedfishRequest{
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, RedfishRequest{
 					BaseURL:  env.RedfishBaseURL,
 					Method:   "GET",
 					Path:     "/Systems/1",
@@ -766,7 +766,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 		Context("Service discovery", func() {
 			It("should return service root at /redfish/v1", func() {
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("GET", "", ""))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("GET", "", ""))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(ContainSubstring(`"@odata.id":"/redfish/v1"`))
 				Expect(out).To(ContainSubstring("RedfishVersion"))
@@ -777,7 +777,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 		Context("Power management", func() {
 			It("should return system power state", func() {
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("GET", "/Systems/1", ""))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("GET", "/Systems/1", ""))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(SatisfyAny(
 					ContainSubstring("On"),
@@ -786,7 +786,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			})
 
 			It("should advertise supported reset action values", func() {
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("GET", "/Systems/1", ""))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("GET", "/Systems/1", ""))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(ContainSubstring(`"ResetType@Redfish.AllowableValues"`))
 				Expect(out).To(ContainSubstring(`"On"`))
@@ -797,37 +797,37 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			})
 
 			It("should accept graceful shutdown action and VM is actually off", func() {
-				_, err := runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"GracefulShutdown"}`))
+				_, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"GracefulShutdown"}`))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIDeleted(ctx, k8sClient, ns)
 			})
 
 			It("should accept power on reset action and VM is actually running", func() {
-				_, err := runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"On"}`))
+				_, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"On"}`))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIRunning(ctx, k8sClient, ns)
 			})
 
 			It("should accept graceful restart action and VM is stopped then started again", func() {
-				_, err := runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"GracefulRestart"}`))
+				_, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"GracefulRestart"}`))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIPowerCycle(ctx, k8sClient, ns)
 			})
 
 			It("should accept force restart action and VM is stopped then started again", func() {
-				_, err := runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"ForceRestart"}`))
+				_, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"ForceRestart"}`))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIPowerCycle(ctx, k8sClient, ns)
 			})
 
 			It("should accept force off action and VM is actually off", func() {
-				_, err := runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"ForceOff"}`))
+				_, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"ForceOff"}`))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIDeleted(ctx, k8sClient, ns)
 			})
 
 			It("should accept power on reset action and VM is actually running", func() {
-				_, err := runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"On"}`))
+				_, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"On"}`))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIRunning(ctx, k8sClient, ns)
 			})
@@ -839,7 +839,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			})
 
 			It("should return current boot configuration", func() {
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("GET", "/Systems/1", ""))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("GET", "/Systems/1", ""))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(ContainSubstring("Boot"))
 			})
@@ -847,7 +847,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			It("should set boot to PXE once", func() {
 				By("setting a one-time PXE boot override through Redfish")
 				body := `{"Boot":{"BootSourceOverrideTarget":"Pxe","BootSourceOverrideEnabled":"Once"}}`
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(strings.TrimSpace(out)).To(SatisfyAny(
 					ContainSubstring("200"),
@@ -861,12 +861,12 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				verifyBMCBootOverride(ctx, k8sClient, ns, true)
 
 				By("powering off the VM")
-				_, err = runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"ForceOff"}`))
+				_, err = testutil.RunCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"ForceOff"}`))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIDeleted(ctx, k8sClient, ns)
 
 				By("powering on the VM to consume the one-time override")
-				_, err = runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"On"}`))
+				_, err = testutil.RunCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"On"}`))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIRunning(ctx, k8sClient, ns)
 
@@ -878,7 +878,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			It("should set boot to PXE continuous", func() {
 				verifyBMCBootOverride(ctx, k8sClient, ns, false)
 				body := `{"Boot":{"BootSourceOverrideTarget":"Pxe","BootSourceOverrideEnabled":"Continuous"}}`
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(strings.TrimSpace(out)).To(SatisfyAny(
 					ContainSubstring("200"),
@@ -894,7 +894,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 			It("should set boot to disk", func() {
 				body := `{"Boot":{"BootSourceOverrideTarget":"Hdd","BootSourceOverrideEnabled":"Once"}}`
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(strings.TrimSpace(out)).To(SatisfyAny(
 					ContainSubstring("200"),
@@ -909,7 +909,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 			It("should set boot to Cd", func() {
 				body := `{"Boot":{"BootSourceOverrideTarget":"Cd","BootSourceOverrideEnabled":"Once"}}`
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(strings.TrimSpace(out)).To(SatisfyAny(
 					ContainSubstring("200"),
@@ -924,7 +924,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 			It("should set boot mode to UEFI", func() {
 				body := `{"Boot":{"BootSourceOverrideMode":"UEFI"}}`
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(strings.TrimSpace(out)).To(SatisfyAny(
 					ContainSubstring("200"),
@@ -935,7 +935,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 			It("should set boot mode to Legacy", func() {
 				body := `{"Boot":{"BootSourceOverrideMode":"Legacy"}}`
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(strings.TrimSpace(out)).To(SatisfyAny(
 					ContainSubstring("200"),
@@ -947,7 +947,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 		Context("System and manager information", func() {
 			It("should return system details including boot override state", func() {
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("GET", "/Systems/1", ""))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("GET", "/Systems/1", ""))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(ContainSubstring("ComputerSystem"))
 				Expect(out).To(ContainSubstring(`"BootSourceOverrideEnabled"`))
@@ -956,7 +956,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			})
 
 			It("should return manager information", func() {
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("GET", "/Managers/BMC", ""))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("GET", "/Managers/BMC", ""))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(ContainSubstring("Manager"))
 			})
@@ -972,7 +972,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 		Context("Virtual Media Redfish API", func() {
 			It("should return virtual media resource CD1", func() {
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("GET", "/Managers/BMC/VirtualMedia/CD1", ""))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("GET", "/Managers/BMC/VirtualMedia/CD1", ""))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(ContainSubstring("VirtualMedia"))
 				Expect(out).To(ContainSubstring("CD1"))
@@ -983,14 +983,14 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			})
 
 			It("should power off the VM", func() {
-				_, err := runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"ForceOff"}`))
+				_, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"ForceOff"}`))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIDeleted(ctx, k8sClient, ns)
 			})
 
 			It("should accept InsertMedia action", func() {
 				body := `{"Image":"https://releases.ubuntu.com/noble/ubuntu-24.04.3-live-server-amd64.iso","Inserted":true}`
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Managers/BMC/VirtualMedia/CD1/Actions/VirtualMedia.InsertMedia", body))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("POST", "/Managers/BMC/VirtualMedia/CD1/Actions/VirtualMedia.InsertMedia", body))
 				Expect(err).NotTo(HaveOccurred())
 				trimmed := strings.TrimSpace(out)
 				Expect(trimmed).To(SatisfyAny(
@@ -1007,7 +1007,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			})
 
 			It("should return virtual media status after insert attempt", func() {
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("GET", "/Managers/BMC/VirtualMedia/CD1", ""))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("GET", "/Managers/BMC/VirtualMedia/CD1", ""))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(ContainSubstring("VirtualMedia"))
 				Expect(out).To(ContainSubstring("CD1"))
@@ -1015,7 +1015,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 			It("should set boot to Cd and verify CDROM becomes boot index 1", func() {
 				body := `{"Boot":{"BootSourceOverrideTarget":"Cd","BootSourceOverrideEnabled":"Once"}}`
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(strings.TrimSpace(out)).To(SatisfyAny(
 					ContainSubstring("200"),
@@ -1029,7 +1029,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			})
 
 			It("should accept EjectMedia action", func() {
-				out, err := runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Managers/BMC/VirtualMedia/CD1/Actions/VirtualMedia.EjectMedia", `{}`))
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("POST", "/Managers/BMC/VirtualMedia/CD1/Actions/VirtualMedia.EjectMedia", `{}`))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(strings.TrimSpace(out)).To(SatisfyAny(
 					ContainSubstring("200"),

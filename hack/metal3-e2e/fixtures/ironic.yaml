@@ -1,0 +1,16 @@
+# Applied by install-metal3.sh via envsubst (versions from Makefile exports).
+# BMO must use IrSO Service DNS (:80 API, :8080 images), not br-prov host ports.
+apiVersion: ironic.metal3.io/v1alpha1
+kind: Ironic
+metadata:
+  name: ironic
+  namespace: ${IRONIC_NS}
+spec:
+  version: "${IRONIC_VERSION}"
+  networking:
+    interface: ${BR_NAME}
+    ipAddress: "${BR_IP}" # PXE/DHCP on provisioning L2 only
+    dhcp:
+      networkCIDR: "${BR_SUBNET}"
+      rangeBegin: "${DHCP_RANGE_BEGIN}"
+      rangeEnd: "${DHCP_RANGE_END}"

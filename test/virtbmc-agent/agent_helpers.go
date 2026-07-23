@@ -1,12 +1,9 @@
 package virtbmcagent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
 	kvclient "kubevirt.io/client-go/kubevirt"
@@ -17,15 +14,13 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/kubernetes"
-	kubescheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/remotecommand"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
+	"kubevirt.io/kubevirtbmc/test/util"
 )
 
 const (
@@ -35,20 +30,19 @@ const (
 	agentSecretName     = "bmc-credentials-secret"
 	issue191DiskName    = "oneshot-conflict-disk"
 	issue191RemovedDisk = "oneshot-removed-disk"
-	curlImage           = "curlimages/curl:latest"
-	ipmitoolImage       = "kubevirtbmc/ipmitool:latest" // ipmitool v1.8.19
 	agentTestTimeout    = 60 * time.Second
 	agentTestInterval   = 250 * time.Millisecond
 	agentDeploymentName = "testvm-virtbmc"
 	// suiteInitTimeout covers container disk image pull during suite setup.
 	suiteInitTimeout     = 180 * time.Second
 	vmPowerStatusTimeout = 120 * time.Second
-	helperPodTimeout     = 180 * time.Second
 
-	redfishClientPodName = "redfish-client"
-	ipmitoolPodName      = "ipmitool"
-	sleepDuration        = "999999999"
+	redfishClientPodName = util.RedfishClientPodName
+	ipmitoolPodName      = util.IPMIToolPodName
 )
+
+type RedfishRequest = util.RedfishRequest
+type IPMIRequest = util.IPMIRequest
 
 type agentTestEnv struct {
 	VM             *kubevirtv1.VirtualMachine
@@ -529,213 +523,6 @@ func waitForAgentDeploymentReady(ctx context.Context, k8sClient client.Client, n
 			deployment.Status.ReadyReplicas >= desiredReplicas &&
 			deployment.Status.AvailableReplicas >= desiredReplicas
 	}, agentTestTimeout, agentTestInterval).Should(BeTrue(), "agent deployment %q should become ready", deploymentName)
-}
-
-func CreateRedfishClientPod(ctx context.Context, clientset *kubernetes.Clientset, namespace string) error {
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: redfishClientPodName, Namespace: namespace},
-		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
-			Containers: []corev1.Container{
-				{
-					Name:    "curl",
-					Image:   curlImage,
-					Command: []string{"sleep", sleepDuration},
-				},
-			},
-		},
-	}
-	_, err := clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create redfish-client pod: %w", err)
-	}
-	Eventually(func() bool {
-		p, getErr := clientset.CoreV1().Pods(namespace).Get(ctx, redfishClientPodName, metav1.GetOptions{})
-		if getErr != nil {
-			return false
-		}
-		return p.Status.Phase == corev1.PodRunning
-	}, helperPodTimeout, agentTestInterval).Should(BeTrue(), "redfish-client pod should reach Running")
-	return nil
-}
-
-func CreateIPMIToolPod(ctx context.Context, clientset *kubernetes.Clientset, namespace string) error {
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: ipmitoolPodName, Namespace: namespace},
-		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
-			Containers: []corev1.Container{
-				{
-					Name:    "ipmitool",
-					Image:   ipmitoolImage,
-					Command: []string{"sleep", sleepDuration},
-				},
-			},
-		},
-	}
-	_, err := clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create ipmitool pod: %w", err)
-	}
-	Eventually(func() bool {
-		p, getErr := clientset.CoreV1().Pods(namespace).Get(ctx, ipmitoolPodName, metav1.GetOptions{})
-		if getErr != nil {
-			return false
-		}
-		return p.Status.Phase == corev1.PodRunning
-	}, helperPodTimeout, agentTestInterval).Should(BeTrue(), "ipmitool pod should reach Running")
-	return nil
-}
-
-type execOptions struct {
-	Namespace     string
-	PodName       string
-	ContainerName string
-	Command       []string
-}
-
-func execInPod(ctx context.Context, cfg *rest.Config, clientset *kubernetes.Clientset, opts execOptions) (stdout, stderr string, err error) {
-	req := clientset.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Namespace(opts.Namespace).
-		Name(opts.PodName).
-		SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: opts.ContainerName,
-			Command:   opts.Command,
-			Stdout:    true,
-			Stderr:    true,
-		}, kubescheme.ParameterCodec)
-
-	executor, err := remotecommand.NewSPDYExecutor(cfg, "POST", req.URL())
-	if err != nil {
-		return "", "", fmt.Errorf("creating SPDY executor: %w", err)
-	}
-
-	var outBuf, errBuf bytes.Buffer
-	if err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdout: &outBuf,
-		Stderr: &errBuf,
-	}); err != nil {
-		return outBuf.String(), errBuf.String(), fmt.Errorf("exec stream: %w", err)
-	}
-
-	return outBuf.String(), errBuf.String(), nil
-}
-
-func runCurlInCluster(ctx context.Context, cfg *rest.Config, namespace string, args ...string) (stdout, stderr string, err error) {
-	clientset, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return "", "", fmt.Errorf("building clientset: %w", err)
-	}
-	if err := CreateRedfishClientPod(ctx, clientset, namespace); err != nil {
-		return "", "", err
-	}
-	cmd := append([]string{"curl"}, args...)
-	return execInPod(ctx, cfg, clientset, execOptions{
-		Namespace:     namespace,
-		PodName:       redfishClientPodName,
-		ContainerName: "curl",
-		Command:       cmd,
-	})
-}
-
-type RedfishRequest struct {
-	BaseURL    string
-	Method     string
-	Path       string
-	Body       string
-	Username   string
-	Password   string
-	XAuthToken string
-}
-
-func runCurlRedfish(ctx context.Context, cfg *rest.Config, namespace string, r RedfishRequest) (string, error) {
-	url := r.BaseURL
-	if r.Path != "" {
-		url = strings.TrimSuffix(r.BaseURL, "/") + r.Path
-	}
-	args := []string{"--connect-timeout", "5", "--max-time", "15", "-i", "-L", "-X", r.Method}
-	if r.XAuthToken != "" {
-		args = append(args, "-H", "X-Auth-Token: "+r.XAuthToken)
-	} else if r.Username != "" && r.Password != "" {
-		args = append(args, "-u", r.Username+":"+r.Password)
-	}
-	if r.Body != "" {
-		args = append(args, "-H", "Content-Type: application/json", "-d", r.Body)
-	}
-	args = append(args, url)
-
-	out, _, err := runCurlInCluster(ctx, cfg, namespace, args...)
-	return out, err
-}
-
-func CreateRedfishSession(ctx context.Context, cfg *rest.Config, namespace, baseURL, username, password string) (token string, err error) {
-	body := fmt.Sprintf(`{"UserName":"%s","Password":"%s"}`, username, password)
-	out, err := runCurlRedfish(ctx, cfg, namespace, RedfishRequest{
-		BaseURL:  baseURL,
-		Method:   "POST",
-		Path:     "/SessionService/Sessions",
-		Body:     body,
-		Username: username,
-		Password: password,
-	})
-	if err != nil {
-		return "", err
-	}
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if idx := strings.Index(line, ":"); idx >= 0 && strings.EqualFold(strings.TrimSpace(line[:idx]), "X-Auth-Token") {
-			token = strings.TrimSpace(line[idx+1:])
-			return token, nil
-		}
-	}
-	return "", fmt.Errorf("X-Auth-Token not found in session response")
-}
-
-type IPMIRequest struct {
-	ServiceHost string
-	Username    string
-	Password    string
-	Interface   string // "lan" or "lanplus"; defaults to "lanplus"
-	RetryCount  int    // when > 0, passes -R to ipmitool (retry count)
-	Args        []string
-}
-
-func buildIPMICommand(r IPMIRequest) []string {
-	iface := r.Interface
-	if iface == "" {
-		iface = "lanplus"
-	}
-	cmd := []string{"ipmitool", "-I", iface, "-U", r.Username, "-P", r.Password, "-H", r.ServiceHost}
-	if r.RetryCount > 0 {
-		cmd = append(cmd, "-R", strconv.Itoa(r.RetryCount))
-	}
-	return append(cmd, r.Args...)
-}
-
-func runIPMIInCluster(ctx context.Context, cfg *rest.Config, namespace string, r IPMIRequest) (stdout, stderr string, err error) {
-	stdout, stderr, _, err = runIPMIInClusterTimed(ctx, cfg, namespace, r)
-	return stdout, stderr, err
-}
-
-func runIPMIInClusterTimed(ctx context.Context, cfg *rest.Config, namespace string, r IPMIRequest) (stdout, stderr string, elapsed time.Duration, err error) {
-	clientset, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return "", "", 0, fmt.Errorf("building clientset: %w", err)
-	}
-	if err := CreateIPMIToolPod(ctx, clientset, namespace); err != nil {
-		return "", "", 0, err
-	}
-
-	start := time.Now()
-	stdout, stderr, err = execInPod(ctx, cfg, clientset, execOptions{
-		Namespace:     namespace,
-		PodName:       ipmitoolPodName,
-		ContainerName: "ipmitool",
-		Command:       buildIPMICommand(r),
-	})
-	return stdout, stderr, time.Since(start), err
 }
 
 func verifyDataVolumeExists(ctx context.Context, k8sClient client.Client, namespace, name string) {

@@ -38,8 +38,11 @@ endif
 # tools. (i.e. podman)
 CONTAINER_TOOL ?= docker
 
-# KUBEVIRT API version to use
+# KUBEVIRT API version to use (CRD codegen); keep in sync with KUBEVIRT_VERSION.
 KUBEVIRT_API_VERSION = v1.8.4
+# Runtime install pin for e2e (test/util InstallKubeVirt).
+export KUBEVIRT_VERSION ?= $(KUBEVIRT_API_VERSION)
+export CDI_VERSION ?= v1.65.0
 
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
@@ -146,12 +149,16 @@ e2e-setup: kind cloud-provider-kind ## Setup end-to-end test environment.
 
 .PHONY: e2e-teardown
 e2e-teardown: kind ## Teardown end-to-end test environment.
+ifeq ($(KEEP_ENV),true)
+	@echo "KEEP_ENV=true, skipping e2e-teardown"
+else
 	@if [ -f $(CLOUD_PROVIDER_KIND_PID_FILE) ]; then \
 		echo "Stopping cloud-provider-kind..."; \
 		kill $$(cat $(CLOUD_PROVIDER_KIND_PID_FILE)) 2>/dev/null || true; \
 		rm -f $(CLOUD_PROVIDER_KIND_PID_FILE); \
 	fi
 	$(KIND) delete cluster --name kvbmc-e2e
+endif
 
 .PHONY: e2e-test
 e2e-test: generate fmt vet kind ## Run end-to-end tests (controller first, then agent: IPMI, Redfish, Virtual Media).
@@ -160,6 +167,42 @@ e2e-test: generate fmt vet kind ## Run end-to-end tests (controller first, then 
 
 .PHONY: local-e2e-test
 local-e2e-test: e2e-setup e2e-test e2e-teardown ## Run end-to-end tests locally.
+
+##@ Metal3 / Ironic integration e2e (release-grade; not run on PRs)
+
+# External dependency versions — exported into hack/metal3-e2e/*.sh and go e2e.
+# Override per-run: make metal3-e2e-setup IRSO_VERSION=v0.11.0
+export IRSO_VERSION ?= v0.10.0
+export BMO_VERSION ?= v0.13.2
+export IRONIC_VERSION ?= 37.0
+export MULTUS_VERSION ?= v4.2.2
+export CNI_PLUGINS_VERSION ?= v1.6.2
+# CERT_MANAGER_VERSION / KUBEVIRT_VERSION / CDI_VERSION are exported above.
+
+METAL3_CLUSTER ?= kvbmc-metal3-e2e
+
+.PHONY: metal3-e2e-setup
+metal3-e2e-setup: kind ## Create single-node Kind + br-prov + Multus + IrSO/BMO.
+	@$(KIND) get clusters 2>/dev/null | grep -q $(METAL3_CLUSTER) || \
+		$(KIND) create cluster --name $(METAL3_CLUSTER) --config test/kind-config-metal3.yaml --image=kindest/node:$(KIND_K8S_VERSION)
+	@CLUSTER_NAME=$(METAL3_CLUSTER) bash hack/metal3-e2e/setup-prov-net.sh
+	@CLUSTER_NAME=$(METAL3_CLUSTER) bash hack/metal3-e2e/install-metal3.sh
+
+.PHONY: metal3-e2e-teardown
+metal3-e2e-teardown: kind ## Tear down Metal3 stack, Multus NAD/br-prov, and Kind cluster. KEEP_ENV=true skips.
+ifeq ($(KEEP_ENV),true)
+	@echo "KEEP_ENV=true, skipping metal3-e2e-teardown"
+else
+	$(KIND) delete cluster --name $(METAL3_CLUSTER)
+endif
+
+.PHONY: metal3-e2e-test
+metal3-e2e-test: generate fmt vet ## Run Metal3/Ironic integration tests (requires metal3-e2e-setup + built images).
+	# go test -timeout bounds the process; -ginkgo.timeout bounds the suite (Ginkgo default is 1h).
+	KIND_CLUSTER=$(METAL3_CLUSTER) go test -v ./test/metal3-e2e/... -ginkgo.v -ginkgo.timeout=120m -timeout 120m
+
+.PHONY: local-metal3-e2e-test
+local-metal3-e2e-test: metal3-e2e-setup metal3-e2e-test metal3-e2e-teardown ## Full Metal3 e2e locally (heavy). KEEP_ENV=true keeps Kind+stack.
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter & yamllint

@@ -1,0 +1,12 @@
+# Single-node Kind for Metal3/Ironic integration e2e.
+# Provisioning L2 is a node-local bridge (br-prov) + Multus, not an extra Docker network.
+apiVersion: kind.x-k8s.io/v1alpha4
+kind: Cluster
+kubeadmConfigPatches:
+  - |
+    apiVersion: kubelet.config.k8s.io/v1beta1
+    kind: KubeletConfiguration
+    serializeImagePulls: false
+    maxParallelImagePulls: 10
+nodes:
+  - role: control-plane

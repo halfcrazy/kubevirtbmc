@@ -14,7 +14,8 @@ import (
 
 const (
 	certManagerURLFmt      = "https://github.com/jetstack/cert-manager/releases/download/%s/cert-manager.yaml"
-	kubeVirtVersion        = "v1.8.4"
+	defaultKubeVirtVersion = "v1.8.4"
+	defaultCDIVersion      = "v1.65.0"
 	kubeVirtOperatorURLFmt = "https://github.com/kubevirt/kubevirt/releases/download/%s/kubevirt-operator.yaml"
 	kubeVirtCRURLFmt       = "https://github.com/kubevirt/kubevirt/releases/download/%s/kubevirt-cr.yaml"
 )
@@ -22,6 +23,22 @@ const (
 var (
 	certManagerVersion = os.Getenv("CERT_MANAGER_VERSION")
 )
+
+// kubeVirtInstallVersion prefers KUBEVIRT_VERSION from the Makefile / env.
+func kubeVirtInstallVersion() string {
+	if v := os.Getenv("KUBEVIRT_VERSION"); v != "" {
+		return v
+	}
+	return defaultKubeVirtVersion
+}
+
+// cdiInstallVersion prefers CDI_VERSION from the Makefile / env.
+func cdiInstallVersion() string {
+	if v := os.Getenv("CDI_VERSION"); v != "" {
+		return v
+	}
+	return defaultCDIVersion
+}
 
 func warnError(err error) {
 	_, _ = fmt.Fprintf(GinkgoWriter, "WARNING: %v\n", err)
@@ -102,6 +119,74 @@ func VirtualMediaPrerequisitesMet() bool {
 	return IsCDIInstalled() && HasDeclarativeHotplugVolumesEnabled()
 }
 
+func InstallCDI() error {
+	version := cdiInstallVersion()
+	if !strings.HasPrefix(version, "v") || strings.Contains(version, "<") {
+		return fmt.Errorf("invalid CDI version %q", version)
+	}
+	_, _ = fmt.Fprintf(GinkgoWriter, "Installing CDI %s\n", version)
+
+	operatorURL := fmt.Sprintf("https://github.com/kubevirt/containerized-data-importer/releases/download/%s/cdi-operator.yaml", version)
+	if _, err := Run(exec.Command("kubectl", "apply", "-f", operatorURL)); err != nil {
+		return fmt.Errorf("apply CDI operator: %w", err)
+	}
+	crURL := fmt.Sprintf("https://github.com/kubevirt/containerized-data-importer/releases/download/%s/cdi-cr.yaml", version)
+	if _, err := Run(exec.Command("kubectl", "apply", "-f", crURL)); err != nil {
+		return fmt.Errorf("apply CDI CR: %w", err)
+	}
+
+	Eventually(func() (string, error) {
+		cmd := exec.Command("kubectl", "get", "cdi", "cdi", "-n", "cdi",
+			"-o", "jsonpath={.status.phase}", "--ignore-not-found")
+		out, err := Run(cmd)
+		return strings.TrimSpace(out), err
+	}, "5m", "5s").Should(Equal("Deployed"), "CDI should reach Deployed phase")
+	return nil
+}
+
+// EnsureDefaultStorageProfileAccessMode patches the default StorageProfile so CDI
+// DataVolumes that only set storage.size (e.g. virtbmc InsertMedia) can bind on
+// Kind local-path, whose provisioner is unrecognized and leaves claimPropertySets empty.
+func EnsureDefaultStorageProfileAccessMode() error {
+	patch := `{"spec":{"claimPropertySets":[{"accessModes":["ReadWriteOnce"],"volumeMode":"Filesystem"}]}}`
+	Eventually(func() error {
+		_, err := Run(exec.Command("kubectl", "get", "storageprofile", "standard"))
+		return err
+	}, "2m", "2s").Should(Succeed(), "StorageProfile standard should exist after CDI is Deployed")
+
+	out, err := Run(exec.Command("kubectl", "patch", "storageprofile", "standard",
+		"--type=merge", "-p", patch))
+	if err != nil {
+		return fmt.Errorf("patch StorageProfile standard: %w (%s)", err, out)
+	}
+	return nil
+}
+
+func EnsureDeclarativeHotplugVolumes() error {
+	if HasDeclarativeHotplugVolumesEnabled() {
+		return nil
+	}
+	cmd := exec.Command("kubectl", "patch", "kubevirt", "kubevirt", "-n", "kubevirt", "--type=json", "-p",
+		`[{"op":"add","path":"/spec/configuration/developerConfiguration/featureGates/-","value":"DeclarativeHotplugVolumes"}]`)
+	if _, err := Run(cmd); err != nil {
+		// featureGates may be missing; merge-patch a full developerConfiguration
+		cmd = exec.Command("kubectl", "patch", "kubevirt", "kubevirt", "-n", "kubevirt", "--type=merge", "-p",
+			`{"spec":{"configuration":{"developerConfiguration":{"featureGates":["DeclarativeHotplugVolumes"]}}}}`)
+		if _, err2 := Run(cmd); err2 != nil {
+			return fmt.Errorf("enable DeclarativeHotplugVolumes: %w (merge fallback: %v)", err, err2)
+		}
+	}
+	Eventually(HasDeclarativeHotplugVolumesEnabled, "2m", "5s").Should(BeTrue())
+	// Patching the KubeVirt CR restarts virt-api; creating VMs before it is back
+	// hits virtualmachines-mutator with connection refused.
+	Eventually(func() error {
+		_, err := Run(exec.Command("kubectl", "-n", "kubevirt", "rollout", "status", "deploy/virt-api", "--timeout=60s"))
+		return err
+	}, "5m", "5s").Should(Succeed(), "virt-api should be Available after feature-gate patch")
+	Eventually(IsKubeVirtInstalled, "3m", "5s").Should(BeTrue(), "KubeVirt should return to Deployed")
+	return nil
+}
+
 func IsKubeVirtInstalled() bool {
 	cmd := exec.Command("kubectl", "get", "kubevirt", "kubevirt", "-n", "kubevirt",
 		"-o", "jsonpath={.status.phase}", "--ignore-not-found")
@@ -113,13 +198,15 @@ func IsKubeVirtInstalled() bool {
 }
 
 func InstallKubeVirt() error {
-	operatorURL := fmt.Sprintf(kubeVirtOperatorURLFmt, kubeVirtVersion)
+	version := kubeVirtInstallVersion()
+	_, _ = fmt.Fprintf(GinkgoWriter, "Installing KubeVirt %s\n", version)
+	operatorURL := fmt.Sprintf(kubeVirtOperatorURLFmt, version)
 	cmd := exec.Command("kubectl", "apply", "-f", operatorURL)
 	if _, err := Run(cmd); err != nil {
 		return fmt.Errorf("apply KubeVirt operator: %w", err)
 	}
 
-	crURL := fmt.Sprintf(kubeVirtCRURLFmt, kubeVirtVersion)
+	crURL := fmt.Sprintf(kubeVirtCRURLFmt, version)
 	cmd = exec.Command("kubectl", "apply", "-f", crURL)
 	if _, err := Run(cmd); err != nil {
 		return fmt.Errorf("apply KubeVirt CR: %w", err)
@@ -215,7 +302,7 @@ func getProjectDir() (string, error) {
 	if err != nil {
 		return wd, err
 	}
-	for _, suffix := range []string{"/test/virtbmc-controller", "/test/virtbmc-agent"} {
+	for _, suffix := range []string{"/test/virtbmc-controller", "/test/virtbmc-agent", "/test/metal3-e2e"} {
 		if idx := strings.Index(wd, suffix); idx != -1 {
 			return wd[:idx], nil
 		}
