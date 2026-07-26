@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -16,48 +17,12 @@ const (
 	kubeVirtOperatorURLFmt = "https://github.com/kubevirt/kubevirt/releases/download/%s/kubevirt-operator.yaml"
 	kubeVirtCRURLFmt       = "https://github.com/kubevirt/kubevirt/releases/download/%s/kubevirt-cr.yaml"
 
-	// NADCRDYAML is the NetworkAttachmentDefinition CRD definition.
-	// We apply only the CRD (not the full Multus daemonset) so the
-	// k8s.v1.cni.cncf.io/networks pod annotation is pure metadata —
-	// no actual CNI plugin runs, the pod starts normally with kindnet.
-	NADCRDYAML = `apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: network-attachment-definitions.k8s.cni.cncf.io
-spec:
-  group: k8s.cni.cncf.io
-  scope: Namespaced
-  names:
-    plural: network-attachment-definitions
-    singular: network-attachment-definition
-    kind: NetworkAttachmentDefinition
-    shortNames:
-      - nad
-      - net-attach-def
-  versions:
-    - name: v1
-      served: true
-      storage: true
-      schema:
-        openAPIV3Schema:
-          description: 'NetworkAttachmentDefinition is a CRD schema specified by the Network Plumbing Working Group to express the intent for attaching pods to one or more logical or physical networks. More information available at: https://github.com/k8snetworkplumbingwg/multi-net-spec'
-          type: object
-          properties:
-            apiVersion:
-              description: 'APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
-              type: string
-            kind:
-              description: 'Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
-              type: string
-            metadata:
-              type: object
-            spec:
-              description: 'NetworkAttachmentDefinition spec defines the desired state of a network attachment'
-              type: object
-              properties:
-                config:
-                  description: 'NetworkAttachmentDefinition config is a JSON-formatted CNI configuration'
-                  type: string`
+	// multusDaemonSetURL bundles the NAD CRD and auto-generates
+	// 00-multus.conf delegating to the primary CNI (kindnet).
+	multusDaemonSetURL = "https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/v4.2.2/deployments/multus-daemonset-thick.yml"
+	// Kind node images may not ship the bridge binary the test NAD needs.
+	cniPluginsVersion = "v1.6.2"
+	cniPluginsURLFmt  = "https://github.com/containernetworking/plugins/releases/download/%[1]s/cni-plugins-linux-%[2]s-%[1]s.tgz"
 )
 
 var (
@@ -143,51 +108,109 @@ func VirtualMediaPrerequisitesMet() bool {
 	return IsCDIInstalled() && HasDeclarativeHotplugVolumesEnabled()
 }
 
-// IsNADCRDInstalled checks whether the NetworkAttachmentDefinition CRD is
-// already registered in the cluster.
-func IsNADCRDInstalled() bool {
-	cmd := exec.Command("kubectl", "get", "crd",
-		"network-attachment-definitions.k8s.cni.cncf.io",
-		"--no-headers", "-o", "name", "--ignore-not-found")
+// IsMultusInstalled checks whether the Multus daemonset is present.
+func IsMultusInstalled() bool {
+	cmd := exec.Command("kubectl", "get", "daemonset", "kube-multus-ds",
+		"-n", "kube-system", "--no-headers", "-o", "name", "--ignore-not-found")
 	output, err := Run(cmd)
 	if err != nil {
 		return false
 	}
-	return strings.TrimSpace(output) == "customresourcedefinition.apiextensions.k8s.io/network-attachment-definitions.k8s.cni.cncf.io"
+	return strings.TrimSpace(output) == "daemonset.apps/kube-multus-ds"
 }
 
-// ApplyNADCRD registers the NetworkAttachmentDefinition CRD in the cluster.
-// No Multus daemonset is installed — the k8s.v1.cni.cncf.io/networks annotation
-// on pods is pure metadata. Pods start normally with the default CNI (kindnet).
-func ApplyNADCRD() error {
-	if IsNADCRDInstalled() {
-		_, _ = fmt.Fprintf(GinkgoWriter, "WARNING: NAD CRD is already installed. Skipping...\n")
-		return nil
+// InstallMultus installs Multus (thick plugin) and the bridge CNI binary on
+// every Kind node.
+func InstallMultus() error {
+	if err := ensureBridgeCNIPlugin(); err != nil {
+		return err
 	}
 
-	cmd := exec.Command("kubectl", "apply", "-f", "-")
-	cmd.Stdin = strings.NewReader(NADCRDYAML)
-	dir, _ := getProjectDir()
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("apply NAD CRD: %w\noutput: %s", err, string(out))
+	cmd := exec.Command("kubectl", "apply", "-f", multusDaemonSetURL)
+	if out, err := Run(cmd); err != nil {
+		return fmt.Errorf("apply Multus thick daemonset: %w\noutput: %s", err, out)
 	}
-	_, _ = fmt.Fprintf(GinkgoWriter, "Applied NAD CRD: %s\n", string(out))
+
+	cmd = exec.Command("kubectl", "rollout", "status", "daemonset/kube-multus-ds",
+		"-n", "kube-system", "--timeout=180s")
+	if out, err := Run(cmd); err != nil {
+		return fmt.Errorf("wait for Multus daemonset rollout: %w\noutput: %s", err, out)
+	}
 	return nil
 }
 
-// CreateTestNetworkAttachmentDefinition creates a minimal bridge-based
-// NetworkAttachmentDefinition that e2e tests can reference via NetworkRef.
-func CreateTestNetworkAttachmentDefinition(namespace string) error {
+// ensureBridgeCNIPlugin copies the bridge CNI binary into /opt/cni/bin on
+// Kind nodes that lack it. The plugin creates the host bridge itself.
+func ensureBridgeCNIPlugin() error {
+	cmd := exec.Command(resolveKindBinary(), "get", "nodes", "--name", kindClusterName())
+	out, err := Run(cmd)
+	if err != nil {
+		return fmt.Errorf("kind get nodes: %w\noutput: %s", err, out)
+	}
+
+	bridgeByArch := map[string]string{}
+	for _, node := range getNonEmptyLines(out) {
+		if _, err := Run(exec.Command("docker", "exec", node, "test", "-x", "/opt/cni/bin/bridge")); err == nil {
+			_, _ = fmt.Fprintf(GinkgoWriter, "bridge CNI plugin already present on %s\n", node)
+			continue
+		}
+
+		archOut, err := Run(exec.Command("docker", "exec", node, "uname", "-m"))
+		if err != nil {
+			return fmt.Errorf("get architecture of node %s: %w", node, err)
+		}
+		arch := strings.TrimSpace(archOut)
+		switch arch {
+		case "x86_64":
+			arch = "amd64"
+		case "aarch64", "arm64":
+			arch = "arm64"
+		default:
+			return fmt.Errorf("unsupported node architecture %q on %s", arch, node)
+		}
+
+		bridge, ok := bridgeByArch[arch]
+		if !ok {
+			tmp, err := os.MkdirTemp("", "cni-plugins")
+			if err != nil {
+				return err
+			}
+			defer os.RemoveAll(tmp) //nolint:errcheck
+
+			tgz := filepath.Join(tmp, "cni-plugins.tgz")
+			url := fmt.Sprintf(cniPluginsURLFmt, cniPluginsVersion, arch)
+			if out, err := Run(exec.Command("curl", "-fsSL", "-o", tgz, url)); err != nil {
+				return fmt.Errorf("download CNI plugins from %s: %w\noutput: %s", url, err, out)
+			}
+			if out, err := Run(exec.Command("tar", "-xzf", tgz, "-C", tmp, "./bridge")); err != nil {
+				return fmt.Errorf("extract bridge plugin: %w\noutput: %s", err, out)
+			}
+			bridge = filepath.Join(tmp, "bridge")
+			bridgeByArch[arch] = bridge
+		}
+
+		if out, err := Run(exec.Command("docker", "cp", bridge, node+":/opt/cni/bin/bridge")); err != nil {
+			return fmt.Errorf("copy bridge plugin to node %s: %w\noutput: %s", node, err, out)
+		}
+		if out, err := Run(exec.Command("docker", "exec", node, "chmod", "+x", "/opt/cni/bin/bridge")); err != nil {
+			return fmt.Errorf("chmod bridge plugin on node %s: %w\noutput: %s", node, err, out)
+		}
+		_, _ = fmt.Fprintf(GinkgoWriter, "installed bridge CNI plugin on %s\n", node)
+	}
+	return nil
+}
+
+// CreateTestNetworkAttachmentDefinition creates a bridge NAD for NetworkRef
+// tests. Empty ipam means L2-only: attach the interface, no IP allocation.
+func CreateTestNetworkAttachmentDefinition(namespace, name string) error {
 	nadYAML := fmt.Sprintf(`apiVersion: k8s.cni.cncf.io/v1
 kind: NetworkAttachmentDefinition
 metadata:
-  name: test-multus-network
+  name: %s
   namespace: %s
 spec:
-  config: '{"cniVersion":"0.3.1","name":"test-multus-network","type":"bridge","bridge":"br-test"}'
-`, namespace)
+  config: '{"cniVersion":"0.3.1","name":"%[1]s","type":"bridge","bridge":"br-test","ipam":{}}'
+`, name, namespace)
 
 	cmd := exec.Command("kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(nadYAML)

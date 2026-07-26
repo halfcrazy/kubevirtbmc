@@ -100,12 +100,18 @@ var _ = BeforeSuite(func() {
 	}
 
 	if !skipMultusInstall {
-		By("applying the NetworkAttachmentDefinition CRD")
-		err = util.ApplyNADCRD()
-		Expect(err).ToNot(HaveOccurred())
+		By("installing Multus (thick plugin)")
+		if !util.IsMultusInstalled() {
+			err = util.InstallMultus()
+			Expect(err).ToNot(HaveOccurred())
+		} else {
+			_, _ = fmt.Fprintf(GinkgoWriter, "WARNING: Multus is already installed. Skipping installation...\n")
+		}
 
-		By("creating a test NetworkAttachmentDefinition")
-		err = util.CreateTestNetworkAttachmentDefinition(util.E2ENamespace)
+		By("creating test NetworkAttachmentDefinitions")
+		err = util.CreateTestNetworkAttachmentDefinition(util.E2ENamespace, util.E2EMultusNetworkName)
+		Expect(err).ToNot(HaveOccurred())
+		err = util.CreateTestNetworkAttachmentDefinition(util.E2ENamespace, util.E2EMultusNetworkNameUpdated)
 		Expect(err).ToNot(HaveOccurred())
 	}
 
@@ -144,15 +150,17 @@ var _ = AfterSuite(func() {
 			return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKey{Namespace: util.E2ENamespace, Name: util.E2EBMCName}, &bmc))
 		}, timeout, interval).Should(BeTrue(), "VirtualMachineBMC %s/%s should be deleted", util.E2ENamespace, util.E2EBMCName)
 	}
-	By("cleaning up the test NetworkAttachmentDefinition")
-	kcmd := exec.Command("kubectl", "delete", "network-attachment-definition",
-		util.E2EMultusNetworkName, "-n", util.E2ENamespace, "--ignore-not-found")
-	_, err := util.Run(kcmd)
-	Expect(err).ToNot(HaveOccurred(), "delete NetworkAttachmentDefinition %s/%s", util.E2ENamespace, util.E2EMultusNetworkName)
+	By("cleaning up the test NetworkAttachmentDefinitions")
+	for _, nad := range []string{util.E2EMultusNetworkName, util.E2EMultusNetworkNameUpdated} {
+		kcmd := exec.Command("kubectl", "delete", "network-attachment-definition",
+			nad, "-n", util.E2ENamespace, "--ignore-not-found")
+		_, err := util.Run(kcmd)
+		Expect(err).ToNot(HaveOccurred(), "delete NetworkAttachmentDefinition %s/%s", util.E2ENamespace, nad)
+	}
 
 	By("undeploying the controller-manager")
 	cmd := exec.Command("make", "undeploy")
-	_, err = util.Run(cmd)
+	_, err := util.Run(cmd)
 	Expect(err).ToNot(HaveOccurred(), "make undeploy should succeed")
 })
 

@@ -363,13 +363,12 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 					return ok && val == util.E2EMultusNetworkName
 				}, timeout, interval).Should(BeTrue(), "Pod should be recreated with Multus network annotation")
 
-				// NOTE: we do NOT require the pod to reach Running state here.
-				// The delegate CNI (bridge) may fail in Kind depending on
-				// kernel modules / capabilities. The controller test focuses
-				// on annotation propagation and pod recreation, not CNI
-				// functionality.
-				By("verifying the Pod exists after controller reconciles")
-				Eventually(util.PodExists(ctx, k8sClient, util.E2ENamespace), timeout, interval).Should(BeTrue(), "Pod should exist after NetworkRef change")
+				By("verifying Multus actually attaches the bridge network (network-status annotation)")
+				Eventually(util.PodMultusNetworkAttached(ctx, k8sClient, util.E2ENamespace, util.E2EMultusNetworkName), timeout, interval).Should(BeTrue(),
+					"bridge network %s should be attached by Multus", util.E2EMultusNetworkName)
+
+				By("verifying the agent Pod becomes Running and Ready with the additional interface")
+				Eventually(util.PodRunningAndReady(ctx, k8sClient, util.E2ENamespace), timeout, interval).Should(BeTrue(), "agent Pod should become Running and Ready")
 			})
 
 			It("should recreate Pod when NetworkRef value is changed", func() {
@@ -381,7 +380,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 				By("updating the VirtualMachineBMC to a different NetworkRef")
 				bmc := &bmcv1.VirtualMachineBMC{}
 				Expect(k8sClient.Get(ctx, util.BMCKey(util.E2ENamespace), bmc)).To(Succeed())
-				bmc.Spec.NetworkRef = "updated-multus-network"
+				bmc.Spec.NetworkRef = util.E2EMultusNetworkNameUpdated
 				Expect(k8sClient.Update(ctx, bmc)).To(Succeed())
 
 				By("verifying the Pod is recreated with updated Multus annotation")
@@ -394,13 +393,15 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 						return false
 					}
 					val, ok := pod.Annotations[util.MultusNetworksAnnotation]
-					return ok && val == "updated-multus-network"
+					return ok && val == util.E2EMultusNetworkNameUpdated
 				}, timeout, interval).Should(BeTrue(), "Pod should be recreated with updated Multus annotation")
 
-				// NOTE: no Running check — delegate CNI may not succeed
-				// in all Kind environments (see comment in first NetworkRef test).
-				By("verifying the Pod exists after controller reconciles")
-				Eventually(util.PodExists(ctx, k8sClient, util.E2ENamespace), timeout, interval).Should(BeTrue(), "Pod should exist after NetworkRef change")
+				By("verifying Multus attaches the updated bridge network (network-status annotation)")
+				Eventually(util.PodMultusNetworkAttached(ctx, k8sClient, util.E2ENamespace, util.E2EMultusNetworkNameUpdated), timeout, interval).Should(BeTrue(),
+					"bridge network %s should be attached by Multus", util.E2EMultusNetworkNameUpdated)
+
+				By("verifying the agent Pod becomes Running and Ready with the additional interface")
+				Eventually(util.PodRunningAndReady(ctx, k8sClient, util.E2ENamespace), timeout, interval).Should(BeTrue(), "agent Pod should become Running and Ready")
 			})
 		})
 	})

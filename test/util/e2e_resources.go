@@ -2,6 +2,7 @@ package util
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -33,9 +34,15 @@ const (
 	// created during e2e setup. It is used as the NetworkRef value in tests.
 	E2EMultusNetworkName = "test-multus-network"
 
+	// E2EMultusNetworkNameUpdated is the NAD used for the NetworkRef change test.
+	E2EMultusNetworkNameUpdated = "updated-multus-network"
+
 	// MultusNetworksAnnotation is the pod annotation key that Multus uses
 	// to attach additional network interfaces.
 	MultusNetworksAnnotation = "k8s.v1.cni.cncf.io/networks"
+
+	// MultusNetworkStatusAnnotation is where Multus reports attached networks.
+	MultusNetworkStatusAnnotation = "k8s.v1.cni.cncf.io/network-status"
 )
 
 func AgentPodKey(namespace string) types.NamespacedName {
@@ -107,6 +114,34 @@ func PodRunningAndReadyWithNewUID(ctx context.Context, k8sClient client.Client, 
 		}
 		for _, cond := range pod.Status.Conditions {
 			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// PodMultusNetworkAttached reports whether the agent pod's network-status
+// annotation lists the given NAD as attached.
+func PodMultusNetworkAttached(ctx context.Context, k8sClient client.Client, namespace, nadName string) func() bool {
+	return func() bool {
+		pod := &corev1.Pod{}
+		if err := k8sClient.Get(ctx, AgentPodKey(namespace), pod); err != nil {
+			return false
+		}
+		status, ok := pod.Annotations[MultusNetworkStatusAnnotation]
+		if !ok {
+			return false
+		}
+		var entries []struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal([]byte(status), &entries); err != nil {
+			return false
+		}
+		want := namespace + "/" + nadName
+		for _, e := range entries {
+			if e.Name == want {
 				return true
 			}
 		}
