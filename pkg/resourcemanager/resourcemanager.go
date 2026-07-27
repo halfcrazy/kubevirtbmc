@@ -1,6 +1,11 @@
 package resourcemanager
 
-import bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
+import (
+	"fmt"
+	"strings"
+
+	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
+)
 
 type BootDevice string
 
@@ -10,6 +15,21 @@ const (
 	BootDeviceCd   BootDevice = "Cd"
 	BootDeviceNone BootDevice = "None"
 )
+
+// AmbiguousBootDeviceError indicates that a boot override cannot select one
+// device because multiple candidates exist and none participates in bootOrder.
+type AmbiguousBootDeviceError struct {
+	BootDevice BootDevice
+	Candidates []string
+}
+
+func (e *AmbiguousBootDeviceError) Error() string {
+	return fmt.Sprintf(
+		"multiple candidates for %s boot have no bootOrder: %s",
+		e.BootDevice,
+		strings.Join(e.Candidates, ", "),
+	)
+}
 
 // BootMode represents the persistence mode of a boot device override.
 type BootMode string

@@ -1125,81 +1125,37 @@ func TestVirtualMachineResourceManager_ForcePowerCycle(t *testing.T) {
 }
 
 func TestBuildBootOrderPatch(t *testing.T) {
-	testCases := []struct {
-		name     string
-		ordered  []deviceGroup
-		expected []map[string]any
-	}{
-		{
-			name:     "empty groups → no operations",
-			ordered:  []deviceGroup{},
-			expected: []map[string]any{},
-		},
-		{
-			name: "single group, single device → one op with bootOrder=1",
-			ordered: []deviceGroup{
-				{"disk", "/spec/template/spec/domain/devices/disks", []int{0}},
-			},
-			expected: []map[string]any{
-				{"op": "add", "path": "/spec/template/spec/domain/devices/disks/0/bootOrder", "value": uint(1)},
-			},
-		},
-		{
-			name: "single group, multiple devices → sequential orders",
-			ordered: []deviceGroup{
-				{"disk", "/spec/template/spec/domain/devices/disks", []int{0, 2}},
-			},
-			expected: []map[string]any{
-				{"op": "add", "path": "/spec/template/spec/domain/devices/disks/0/bootOrder", "value": uint(1)},
-				{"op": "add", "path": "/spec/template/spec/domain/devices/disks/2/bootOrder", "value": uint(2)},
-			},
-		},
-		{
-			name: "multiple groups → sequential orders across groups",
-			ordered: []deviceGroup{
-				{"disk", "/spec/template/spec/domain/devices/disks", []int{0, 1}},
-				{"interface", "/spec/template/spec/domain/devices/interfaces", []int{0}},
-			},
-			expected: []map[string]any{
-				{"op": "add", "path": "/spec/template/spec/domain/devices/disks/0/bootOrder", "value": uint(1)},
-				{"op": "add", "path": "/spec/template/spec/domain/devices/disks/1/bootOrder", "value": uint(2)},
-				{"op": "add", "path": "/spec/template/spec/domain/devices/interfaces/0/bootOrder", "value": uint(3)},
-			},
-		},
-		{
-			name: "group with empty indices → skipped (no ops)",
-			ordered: []deviceGroup{
-				{"disk", "/spec/template/spec/domain/devices/disks", []int{0}},
-				{"interface", "/spec/template/spec/domain/devices/interfaces", []int{}},
-				{"disk", "/spec/template/spec/domain/devices/disks", []int{1}},
-			},
-			expected: []map[string]any{
-				{"op": "add", "path": "/spec/template/spec/domain/devices/disks/0/bootOrder", "value": uint(1)},
-				{"op": "add", "path": "/spec/template/spec/domain/devices/disks/1/bootOrder", "value": uint(2)},
-			},
-		},
-		{
-			name: "PXE boot order: interfaces first, then disks, then cdroms",
-			ordered: []deviceGroup{
-				{"interface", "/spec/template/spec/domain/devices/interfaces", []int{0, 1}},
-				{"disk", "/spec/template/spec/domain/devices/disks", []int{0}},
-				{"disk", "/spec/template/spec/domain/devices/disks", []int{1}},
-			},
-			expected: []map[string]any{
-				{"op": "add", "path": "/spec/template/spec/domain/devices/interfaces/0/bootOrder", "value": uint(1)},
-				{"op": "add", "path": "/spec/template/spec/domain/devices/interfaces/1/bootOrder", "value": uint(2)},
-				{"op": "add", "path": "/spec/template/spec/domain/devices/disks/0/bootOrder", "value": uint(3)},
-				{"op": "add", "path": "/spec/template/spec/domain/devices/disks/1/bootOrder", "value": uint(4)},
-			},
-		},
+	ordered := []bootDeviceRef{
+		{basePath: "/spec/template/spec/domain/devices/interfaces", index: 1},
+		{basePath: "/spec/template/spec/domain/devices/disks", index: 0},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			result := buildBootOrderPatch(tc.ordered)
-			require.Equal(t, tc.expected, result)
-		})
+	require.Equal(t, []map[string]any{
+		{"op": "add", "path": "/spec/template/spec/domain/devices/interfaces/1/bootOrder", "value": uint(1)},
+		{"op": "add", "path": "/spec/template/spec/domain/devices/disks/0/bootOrder", "value": uint(2)},
+	}, buildBootOrderPatch(ordered))
+}
+
+func TestSelectBootDevices(t *testing.T) {
+	devices := []bootDeviceRef{
+		{bootDevice: BootDeviceHdd, name: "disk", bootOrder: util.Ptr[uint](1)},
+		{bootDevice: BootDeviceCd, name: "cd", bootOrder: util.Ptr[uint](2)},
+		{bootDevice: BootDevicePxe, name: "pxe", bootOrder: util.Ptr[uint](3)},
+		{bootDevice: BootDevicePxe, name: "other"},
 	}
+
+	selected, err := selectBootDevices(devices, BootDevicePxe)
+	require.NoError(t, err)
+	require.Equal(t, []string{"pxe", "disk", "cd"}, []string{selected[0].name, selected[1].name, selected[2].name})
+
+	_, err = selectBootDevices([]bootDeviceRef{
+		{bootDevice: BootDevicePxe, name: "iface-1"},
+		{bootDevice: BootDevicePxe, name: "iface-2"},
+	}, BootDevicePxe)
+	var ambiguous *AmbiguousBootDeviceError
+	require.ErrorAs(t, err, &ambiguous)
+	require.Equal(t, BootDevicePxe, ambiguous.BootDevice)
+	require.Equal(t, []string{"iface-1", "iface-2"}, ambiguous.Candidates)
 }
 
 func TestVirtualMachineResourceManager_SetBootDevice(t *testing.T) {
@@ -1219,26 +1175,25 @@ func TestVirtualMachineResourceManager_SetBootDevice(t *testing.T) {
 			shouldError: false,
 		},
 		{
-			name:        "HDD: multiple disks → sequential orders, disk first",
+			name:        "HDD: multiple unconfigured disks → ambiguous error",
 			vm:          builder.NewVirtualMachineBuilder(testNamespace, testVMName).WithDisk("disk-1", nil).WithDisk("disk-2", nil).Build(),
 			bootDevice:  BootDeviceHdd,
-			expectedVM:  builder.NewVirtualMachineBuilder(testNamespace, testVMName).WithDisk("disk-1", util.Ptr[uint](1)).WithDisk("disk-2", util.Ptr[uint](2)).Build(),
-			shouldError: false,
+			shouldError: true,
 		},
 		{
-			name:        "HDD: disk + interface → disk=1, iface=2",
+			name:        "HDD: sole disk selected, unconfigured interface remains excluded",
 			vm:          builder.NewVirtualMachineBuilder(testNamespace, testVMName).WithDisk("disk", nil).WithInterface("iface", nil).Build(),
 			bootDevice:  BootDeviceHdd,
-			expectedVM:  builder.NewVirtualMachineBuilder(testNamespace, testVMName).WithDisk("disk", util.Ptr[uint](1)).WithInterface("iface", util.Ptr[uint](2)).Build(),
+			expectedVM:  builder.NewVirtualMachineBuilder(testNamespace, testVMName).WithDisk("disk", util.Ptr[uint](1)).WithInterface("iface", nil).Build(),
 			shouldError: false,
 		},
 		{
-			name: "HDD: disk + cdrom + iface → disk=1, iface=2, cdrom=3 (disks first, then NICs, then CDROMs)",
+			name: "HDD: sole disk selected, other unconfigured devices remain excluded",
 			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
 				WithDisk("disk", nil).WithCDRomDisk("cd", nil).WithInterface("iface", nil).Build(),
 			bootDevice: BootDeviceHdd,
 			expectedVM: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
-				WithDisk("disk", util.Ptr[uint](1)).WithCDRomDisk("cd", util.Ptr[uint](3)).WithInterface("iface", util.Ptr[uint](2)).Build(),
+				WithDisk("disk", util.Ptr[uint](1)).WithCDRomDisk("cd", nil).WithInterface("iface", nil).Build(),
 			shouldError: false,
 		},
 		{
@@ -1277,26 +1232,25 @@ func TestVirtualMachineResourceManager_SetBootDevice(t *testing.T) {
 			shouldError: false,
 		},
 		{
-			name:        "PXE: multiple interfaces → sequential orders",
+			name:        "PXE: multiple unconfigured interfaces → ambiguous error",
 			vm:          builder.NewVirtualMachineBuilder(testNamespace, testVMName).WithInterface("iface-1", nil).WithInterface("iface-2", nil).Build(),
 			bootDevice:  BootDevicePxe,
-			expectedVM:  builder.NewVirtualMachineBuilder(testNamespace, testVMName).WithInterface("iface-1", util.Ptr[uint](1)).WithInterface("iface-2", util.Ptr[uint](2)).Build(),
-			shouldError: false,
+			shouldError: true,
 		},
 		{
-			name:        "PXE: iface + disk → iface=1, disk=2",
+			name:        "PXE: sole interface selected, unconfigured disk remains excluded",
 			vm:          builder.NewVirtualMachineBuilder(testNamespace, testVMName).WithInterface("iface", nil).WithDisk("disk", nil).Build(),
 			bootDevice:  BootDevicePxe,
-			expectedVM:  builder.NewVirtualMachineBuilder(testNamespace, testVMName).WithInterface("iface", util.Ptr[uint](1)).WithDisk("disk", util.Ptr[uint](2)).Build(),
+			expectedVM:  builder.NewVirtualMachineBuilder(testNamespace, testVMName).WithInterface("iface", util.Ptr[uint](1)).WithDisk("disk", nil).Build(),
 			shouldError: false,
 		},
 		{
-			name: "PXE: iface + disk + cdrom → iface=1, disk=2, cdrom=3",
+			name: "PXE: sole interface selected, other unconfigured devices remain excluded",
 			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
 				WithInterface("iface", nil).WithDisk("disk", nil).WithCDRomDisk("cd", nil).Build(),
 			bootDevice: BootDevicePxe,
 			expectedVM: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
-				WithInterface("iface", util.Ptr[uint](1)).WithDisk("disk", util.Ptr[uint](2)).WithCDRomDisk("cd", util.Ptr[uint](3)).Build(),
+				WithInterface("iface", util.Ptr[uint](1)).WithDisk("disk", nil).WithCDRomDisk("cd", nil).Build(),
 			shouldError: false,
 		},
 		{
@@ -1309,12 +1263,23 @@ func TestVirtualMachineResourceManager_SetBootDevice(t *testing.T) {
 			shouldError: false,
 		},
 		{
-			name: "PXE: iface + cdrom only (no regular disks) → iface=1, cdrom=2",
+			name: "PXE: sole interface selected, unconfigured cdrom remains excluded",
 			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
 				WithInterface("iface", nil).WithCDRomDisk("cd", nil).Build(),
 			bootDevice: BootDevicePxe,
 			expectedVM: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
-				WithInterface("iface", util.Ptr[uint](1)).WithCDRomDisk("cd", util.Ptr[uint](2)).Build(),
+				WithInterface("iface", util.Ptr[uint](1)).WithCDRomDisk("cd", nil).Build(),
+			shouldError: false,
+		},
+		{
+			name: "PXE: only participating interface is selected regardless of array position",
+			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
+				WithInterface("other", nil).WithInterface("pxe", util.Ptr[uint](2)).
+				WithDisk("disk", util.Ptr[uint](1)).Build(),
+			bootDevice: BootDevicePxe,
+			expectedVM: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
+				WithInterface("other", nil).WithInterface("pxe", util.Ptr[uint](1)).
+				WithDisk("disk", util.Ptr[uint](2)).Build(),
 			shouldError: false,
 		},
 		{
@@ -1338,19 +1303,19 @@ func TestVirtualMachineResourceManager_SetBootDevice(t *testing.T) {
 			shouldError: false,
 		},
 		{
-			name:        "CD: cdrom + disk → cdrom=1, disk=2",
+			name:        "CD: sole cdrom selected, unconfigured disk remains excluded",
 			vm:          builder.NewVirtualMachineBuilder(testNamespace, testVMName).WithCDRomDisk("cd", nil).WithDisk("disk", nil).Build(),
 			bootDevice:  BootDeviceCd,
-			expectedVM:  builder.NewVirtualMachineBuilder(testNamespace, testVMName).WithCDRomDisk("cd", util.Ptr[uint](1)).WithDisk("disk", util.Ptr[uint](2)).Build(),
+			expectedVM:  builder.NewVirtualMachineBuilder(testNamespace, testVMName).WithCDRomDisk("cd", util.Ptr[uint](1)).WithDisk("disk", nil).Build(),
 			shouldError: false,
 		},
 		{
-			name: "CD: cdrom + disk + iface → cdrom=1, disk=2, iface=3",
+			name: "CD: sole cdrom selected, other unconfigured devices remain excluded",
 			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
 				WithCDRomDisk("cd", nil).WithDisk("disk", nil).WithInterface("iface", nil).Build(),
 			bootDevice: BootDeviceCd,
 			expectedVM: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
-				WithCDRomDisk("cd", util.Ptr[uint](1)).WithDisk("disk", util.Ptr[uint](2)).WithInterface("iface", util.Ptr[uint](3)).Build(),
+				WithCDRomDisk("cd", util.Ptr[uint](1)).WithDisk("disk", nil).WithInterface("iface", nil).Build(),
 			shouldError: false,
 		},
 		{
@@ -1364,23 +1329,20 @@ func TestVirtualMachineResourceManager_SetBootDevice(t *testing.T) {
 			shouldError: false,
 		},
 		{
-			name: "CD: multiple cdroms + disk + iface → cdrom1=1, cdrom2=2, disk=3, iface=4",
+			name: "CD: multiple unconfigured cdroms → ambiguous error",
 			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
 				WithCDRomDisk("cd1", nil).WithCDRomDisk("cd2", nil).
 				WithDisk("disk", nil).WithInterface("iface", nil).Build(),
-			bootDevice: BootDeviceCd,
-			expectedVM: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
-				WithCDRomDisk("cd1", util.Ptr[uint](1)).WithCDRomDisk("cd2", util.Ptr[uint](2)).
-				WithDisk("disk", util.Ptr[uint](3)).WithInterface("iface", util.Ptr[uint](4)).Build(),
-			shouldError: false,
+			bootDevice:  BootDeviceCd,
+			shouldError: true,
 		},
 		{
-			name: "CD: cdrom + iface only (no regular disks) → cdrom=1, iface=2",
+			name: "CD: sole cdrom selected, unconfigured interface remains excluded",
 			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
 				WithCDRomDisk("cd", nil).WithInterface("iface", nil).Build(),
 			bootDevice: BootDeviceCd,
 			expectedVM: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
-				WithCDRomDisk("cd", util.Ptr[uint](1)).WithInterface("iface", util.Ptr[uint](2)).Build(),
+				WithCDRomDisk("cd", util.Ptr[uint](1)).WithInterface("iface", nil).Build(),
 			shouldError: false,
 		},
 		{
@@ -1567,8 +1529,8 @@ func TestVirtualMachineResourceManager_SetBootDeviceAllowsFirmwareTemplateChange
 	require.NotNil(t, updatedVM.Spec.Template.Spec.Domain.Firmware.Bootloader.EFI)
 	require.NotNil(t, updatedVM.Spec.Template.Spec.Domain.Firmware.Bootloader.EFI.SecureBoot)
 	require.False(t, *updatedVM.Spec.Template.Spec.Domain.Firmware.Bootloader.EFI.SecureBoot)
-	require.NotNil(t, updatedVM.Spec.Template.Spec.Domain.Devices.Disks[0].BootOrder)
-	require.NotNil(t, updatedVM.Spec.Template.Spec.Domain.Devices.Interfaces[0].BootOrder)
+	require.Nil(t, updatedVM.Spec.Template.Spec.Domain.Devices.Disks[0].BootOrder)
+	require.Equal(t, util.Ptr[uint](1), updatedVM.Spec.Template.Spec.Domain.Devices.Interfaces[0].BootOrder)
 }
 
 func TestVirtualMachineResourceManager_DoubleOneshotPreservesOriginalBackup(t *testing.T) {
@@ -1629,9 +1591,9 @@ func TestVirtualMachineResourceManager_DoubleOneshotPreservesOriginalBackup(t *t
 	require.NoError(t, err)
 	disks = updatedVM.Spec.Template.Spec.Domain.Devices.Disks
 	ifaces = updatedVM.Spec.Template.Spec.Domain.Devices.Interfaces
-	require.Equal(t, util.Ptr[uint](2), disks[0].BootOrder)  // disk
+	require.Equal(t, util.Ptr[uint](3), disks[0].BootOrder)  // disk
 	require.Equal(t, util.Ptr[uint](1), disks[1].BootOrder)  // cdrom (CDROM first)
-	require.Equal(t, util.Ptr[uint](3), ifaces[0].BootOrder) // iface
+	require.Equal(t, util.Ptr[uint](2), ifaces[0].BootOrder) // iface
 }
 
 func TestVirtualMachineResourceManager_DoubleOneshotRestoresLateFirmwareChange(t *testing.T) {

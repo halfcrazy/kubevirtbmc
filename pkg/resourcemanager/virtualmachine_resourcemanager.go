@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -605,54 +606,33 @@ func (m *VirtualMachineResourceManager) SetBootDevice(bootDevice BootDevice, opt
 		return fmt.Errorf("no bootable devices found")
 	}
 
-	// Classify disks: CDROM vs regular (Disk, LUN, Floppy)
-	var cdromIndices, regularDiskIndices []int
+	devices := make([]bootDeviceRef, 0, len(disks)+len(ifaces))
 	for i, d := range disks {
+		device := BootDeviceHdd
 		if d.CDRom != nil {
-			cdromIndices = append(cdromIndices, i)
-		} else {
-			regularDiskIndices = append(regularDiskIndices, i)
+			device = BootDeviceCd
 		}
+		devices = append(devices, bootDeviceRef{
+			bootDevice: device,
+			basePath:   "/spec/template/spec/domain/devices/disks",
+			index:      i,
+			name:       d.Name,
+			bootOrder:  d.BootOrder,
+		})
+	}
+	for i, iface := range ifaces {
+		devices = append(devices, bootDeviceRef{
+			bootDevice: BootDevicePxe,
+			basePath:   "/spec/template/spec/domain/devices/interfaces",
+			index:      i,
+			name:       iface.Name,
+			bootOrder:  iface.BootOrder,
+		})
 	}
 
-	// Collect interface indices; no classification needed.
-	ifaceIndices := make([]int, len(ifaces))
-	for i := range ifaceIndices {
-		ifaceIndices[i] = i
-	}
-
-	// Order device groups by boot device preference
-	var ordered []deviceGroup
-	switch bootDevice {
-	case BootDevicePxe:
-		if len(ifaces) == 0 {
-			return fmt.Errorf("no interfaces found for PXE boot")
-		}
-		ordered = []deviceGroup{
-			{"interface", "/spec/template/spec/domain/devices/interfaces", ifaceIndices},
-			{"disk", "/spec/template/spec/domain/devices/disks", regularDiskIndices},
-			{"disk", "/spec/template/spec/domain/devices/disks", cdromIndices},
-		}
-	case BootDeviceHdd:
-		if len(regularDiskIndices) == 0 {
-			return fmt.Errorf("no regular disks found for HDD boot")
-		}
-		ordered = []deviceGroup{
-			{"disk", "/spec/template/spec/domain/devices/disks", regularDiskIndices},
-			{"interface", "/spec/template/spec/domain/devices/interfaces", ifaceIndices},
-			{"disk", "/spec/template/spec/domain/devices/disks", cdromIndices},
-		}
-	case BootDeviceCd:
-		if len(cdromIndices) == 0 {
-			return fmt.Errorf("no CD-ROM found for CD boot")
-		}
-		ordered = []deviceGroup{
-			{"disk", "/spec/template/spec/domain/devices/disks", cdromIndices},
-			{"disk", "/spec/template/spec/domain/devices/disks", regularDiskIndices},
-			{"interface", "/spec/template/spec/domain/devices/interfaces", ifaceIndices},
-		}
-	default:
-		return nil
+	ordered, err := selectBootDevices(devices, bootDevice)
+	if err != nil {
+		return err
 	}
 
 	patchOps := buildBootOrderPatch(ordered)
@@ -1023,32 +1003,78 @@ func smmEnabled(vm *kubevirtv1.VirtualMachine) bool {
 	return smm != nil && (smm.Enabled == nil || *smm.Enabled)
 }
 
-// deviceGroup represents a group of devices of the same type that share a
-// common JSON Patch base path, used to order boot device priorities.
-type deviceGroup struct {
-	devType  string
-	basePath string
-	indices  []int
+type bootDeviceRef struct {
+	bootDevice BootDevice
+	basePath   string
+	index      int
+	name       string
+	bootOrder  *uint
 }
 
-// buildBootOrderPatch creates JSON Patch operations that assign sequential
-// bootOrder values (starting from 1) to every device index across the ordered
-// groups. It uses "add" rather than "replace" because bootOrder may not exist
-// yet on the target resource — JSON Patch "add" handles both creation and
-// replacement.
-func buildBootOrderPatch(ordered []deviceGroup) []map[string]any {
-	patchOps := make([]map[string]any, 0)
-	var order uint = 1
-	for _, grp := range ordered {
-		for _, idx := range grp.indices {
-			op := map[string]any{
-				"op":    "add",
-				"path":  fmt.Sprintf("%s/%d/bootOrder", grp.basePath, idx),
-				"value": order,
-			}
-			patchOps = append(patchOps, op)
-			order++
+// selectBootDevices moves participating devices of the requested category to
+// the front while preserving existing bootOrder within both partitions. If no
+// candidate in the category participates, a sole candidate is selected;
+// multiple candidates are ambiguous and must be configured explicitly.
+func selectBootDevices(devices []bootDeviceRef, requested BootDevice) ([]bootDeviceRef, error) {
+	if requested != BootDevicePxe && requested != BootDeviceHdd && requested != BootDeviceCd {
+		return nil, nil
+	}
+
+	var candidates, participating []bootDeviceRef
+	for _, device := range devices {
+		if device.bootDevice == requested {
+			candidates = append(candidates, device)
 		}
+		if device.bootOrder != nil {
+			participating = append(participating, device)
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no devices found for %s boot", requested)
+	}
+
+	sort.SliceStable(participating, func(i, j int) bool {
+		return *participating[i].bootOrder < *participating[j].bootOrder
+	})
+
+	selected := make([]bootDeviceRef, 0, len(participating))
+	remaining := make([]bootDeviceRef, 0, len(participating))
+	for _, device := range participating {
+		if device.bootDevice == requested {
+			selected = append(selected, device)
+		} else {
+			remaining = append(remaining, device)
+		}
+	}
+
+	if len(selected) == 0 {
+		if len(candidates) > 1 {
+			names := make([]string, len(candidates))
+			for i, candidate := range candidates {
+				names[i] = candidate.name
+			}
+			return nil, &AmbiguousBootDeviceError{
+				BootDevice: requested,
+				Candidates: names,
+			}
+		}
+		selected = append(selected, candidates[0])
+	}
+
+	return append(selected, remaining...), nil
+}
+
+// buildBootOrderPatch assigns sequential bootOrder values to selected devices.
+// JSON Patch "add" handles both creation and replacement.
+func buildBootOrderPatch(ordered []bootDeviceRef) []map[string]any {
+	patchOps := make([]map[string]any, 0, len(ordered))
+	for i, device := range ordered {
+		patchOps = append(patchOps, map[string]any{
+			"op":    "add",
+			"path":  fmt.Sprintf("%s/%d/bootOrder", device.basePath, device.index),
+			"value": uint(i + 1),
+		})
 	}
 	return patchOps
 }
