@@ -21,6 +21,12 @@ func Ptr[T any](value T) *T {
 	return &value
 }
 
+// SystemSerial returns the host serial as "<namespace>/<name>".
+// Redfish ComputerSystem.SerialNumber has no length limit, so this is untruncated.
+func SystemSerial(namespace, name string) string {
+	return namespace + "/" + name
+}
+
 func GetRemoteFileSize(url string) (int64, error) {
 	parsedURL, err := neturl.Parse(url)
 	if err != nil {
