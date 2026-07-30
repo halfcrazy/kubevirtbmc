@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
@@ -52,6 +51,10 @@ type VirtualMachineResourceManager struct {
 	bmcClient  client.Client
 	bmcName    string
 
+	// firmwareVersion is reported as Redfish Manager.FirmwareVersion
+	// (the BMC build identity, typically the git commit SHA).
+	firmwareVersion string
+
 	namespace  string
 	name       string
 	systemUUID string
@@ -66,12 +69,14 @@ func NewVirtualMachineResourceManager(
 	cdiClient cdiclient.Interface,
 	bmcClient client.Client,
 	bmcName string,
+	firmwareVersion string,
 ) *VirtualMachineResourceManager {
 	return &VirtualMachineResourceManager{
-		virtClient: virtClient,
-		cdiClient:  cdiClient,
-		bmcClient:  bmcClient,
-		bmcName:    bmcName,
+		virtClient:      virtClient,
+		cdiClient:       cdiClient,
+		bmcClient:       bmcClient,
+		bmcName:         bmcName,
+		firmwareVersion: firmwareVersion,
 	}
 }
 
@@ -88,12 +93,12 @@ func (m *VirtualMachineResourceManager) Initialize(ctx context.Context, namespac
 	// Initialize computer system
 	m.computerSystem = NewComputerSystem(
 		defaultComputerSystemId,
-		strings.Join([]string{vm.Namespace, vm.Name}, "/"),
+		util.SystemSerial(vm.Namespace, vm.Name),
 		powerStateMap[vm.Status.Ready],
 	)
 
 	// Initialize manager
-	m.manager = NewManager(defaultManagerId, defaultManagerName)
+	m.manager = NewManager(defaultManagerId, defaultManagerName, m.firmwareVersion)
 
 	// Initialize virtual media
 	m.virtualMedia = NewVirtualMedia(defaultVirtualMediaId, defaultVirtualMediaName)
