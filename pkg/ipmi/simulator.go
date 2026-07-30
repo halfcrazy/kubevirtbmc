@@ -78,6 +78,8 @@ func (s *Simulator) Run() error {
 	b := s.buildBMC()
 
 	reg := handlers.NewRegistry()
+	// Use before Register* so middleware wraps every command handler.
+	reg.Use(accessLogMiddleware)
 	handlers.RegisterAppHandlers(reg)
 	handlers.RegisterSessionHandlers(reg)
 	// RegisterChassisHandlers installs go-ipmi's typed codec handlers
@@ -126,7 +128,7 @@ func (s *Simulator) resolveGUID() [16]byte {
 	if s.rm == nil {
 		return [16]byte{}
 	}
-	uidStr, err := s.rm.GetSystemUUID()
+	uidStr, err := s.rm.GetSystemUUID(context.Background())
 	if err != nil {
 		logrus.WithError(err).Warn("failed to get system UUID, falling back to zero GUID")
 		return [16]byte{}
@@ -157,7 +159,8 @@ func (s *Simulator) buildBMC() *bmc.BMC {
 
 	guid := s.resolveGUID()
 
-	b := bmc.New(info, guid, noopHAL{chassis: vmChassis{rm: s.rm}}, bmc.WithKG(nil))
+	chassis := loggingChassis{ChassisHAL: vmChassis{rm: s.rm}}
+	b := bmc.New(info, guid, noopHAL{chassis: chassis}, bmc.WithKG(nil))
 
 	// Register the configured BMC user so RAKP username/password auth succeeds.
 	if s.username != "" {

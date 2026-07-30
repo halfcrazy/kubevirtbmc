@@ -4,8 +4,7 @@ import (
 	"context"
 
 	"github.com/bougou/go-ipmi/pkg/hal"
-	ipmi "github.com/bougou/go-ipmi/pkg/types"
-	"github.com/sirupsen/logrus"
+	"github.com/bougou/go-ipmi/pkg/types"
 
 	"kubevirt.io/kubevirtbmc/pkg/resourcemanager"
 )
@@ -24,6 +23,7 @@ func (noopHAL) Storage() hal.StorageHAL   { return nil }
 func (noopHAL) Network() hal.NetworkHAL   { return nil }
 func (noopHAL) GPIO() hal.GPIOHAL         { return nil }
 func (noopHAL) I2C() hal.I2CHAL           { return nil }
+func (noopHAL) Console() hal.ConsoleHAL   { return nil }
 func (noopHAL) Close() error              { return nil }
 
 // vmChassis implements hal.ChassisHAL by mapping the spec Table 28-3 chassis
@@ -58,19 +58,17 @@ type vmChassis struct {
 }
 
 func (c vmChassis) PowerState(ctx context.Context) (bool, error) {
-	return c.rm.GetPowerStatus()
+	return c.rm.GetPowerStatus(ctx)
 }
 
 func (c vmChassis) SetPower(ctx context.Context, on bool) error {
 	if on {
-		logrus.Info("power on")
-		return c.rm.PowerOn()
+		return c.rm.PowerOn(ctx)
 	}
 	// Immediate power down (no OS notification), per IPMI spec §28.3
 	// ControlPowerDown (0x00). Contrast with WarmReset (0x05 ACPI Soft
 	// Shutdown), which is a graceful stop.
-	logrus.Info("force power off")
-	return c.rm.ForcePowerOff()
+	return c.rm.ForcePowerOff(ctx)
 }
 
 // PowerCycle maps IPMI Chassis Control Power Cycle (0x02) to a forceful restart
@@ -79,24 +77,21 @@ func (c vmChassis) SetPower(ctx context.Context, on bool) error {
 // Contrast with ColdReset (0x03 Hard Reset), which asserts the system reset
 // line without power cycling and is strictly less brutal.
 func (c vmChassis) PowerCycle(ctx context.Context) error {
-	logrus.Info("power cycle (force)")
-	return c.rm.ForcePowerCycle()
+	return c.rm.ForcePowerCycle(ctx)
 }
 
 // ColdReset maps IPMI Hard Reset (0x03) to a graceful KubeVirt restart. Per
 // IPMI spec §28.3, Hard Reset asserts the system reset line without power
 // cycling, making it less disruptive than a full Power Cycle (0x02).
 func (c vmChassis) ColdReset(ctx context.Context) error {
-	logrus.Info("hard reset (graceful restart)")
-	return c.rm.PowerCycle()
+	return c.rm.PowerCycle(ctx)
 }
 
 // WarmReset maps IPMI ACPI Soft Shutdown (0x05) to a graceful KubeVirt stop.
 // go-ipmi dispatches ChassisControlSoftShutdown (0x05) here; per §28.3 that
 // action is an ACPI soft-shutdown (graceful power-off), not a reboot.
 func (c vmChassis) WarmReset(ctx context.Context) error {
-	logrus.Info("acpi soft shutdown")
-	return c.rm.PowerOff()
+	return c.rm.PowerOff(ctx)
 }
 
 func (vmChassis) Identify(context.Context, uint8) error { return hal.ErrNotSupported }
@@ -118,13 +113,13 @@ func (vmChassis) IntrusionState(context.Context) (bool, error) {
 // request would make every plain bootdev on an EFI VM a firmware switch, which
 // is far heavier than a boot-order override and almost never intended. EFI can
 // be reverted to legacy through Redfish BootSourceOverrideMode=Legacy instead.
-func (c vmChassis) SetBootFlags(_ context.Context, flags *ipmi.BootOptionParam_BootFlags) error {
+func (c vmChassis) SetBootFlags(ctx context.Context, flags *types.BootOptionParam_BootFlags) error {
 	if flags == nil {
 		return hal.ErrNotSupported
 	}
 
-	if flags.BootDeviceSelector == ipmi.BootDeviceSelectorNoOverride {
-		return c.rm.ClearBootOverrides()
+	if flags.BootDeviceSelector == types.BootDeviceSelectorNoOverride {
+		return c.rm.ClearBootOverrides(ctx)
 	}
 
 	device, ok := kubevirtBootDevice(flags.BootDeviceSelector)
@@ -143,13 +138,13 @@ func (c vmChassis) SetBootFlags(_ context.Context, flags *ipmi.BootOptionParam_B
 		opts.EFIBoot = &efiBoot
 	}
 
-	return c.rm.SetBootDevice(device, opts)
+	return c.rm.SetBootDevice(ctx, device, opts)
 }
 
 // GetBootFlags reads back boot flags (device, firmware type, persistence)
 // derived by the ResourceManager from the VM spec and status.bootOverride.
-func (c vmChassis) GetBootFlags(_ context.Context) (*ipmi.BootOptionParam_BootFlags, error) {
-	state, err := c.rm.GetBootFlags()
+func (c vmChassis) GetBootFlags(ctx context.Context) (*types.BootOptionParam_BootFlags, error) {
+	state, err := c.rm.GetBootFlags(ctx)
 	if err != nil {
 		return nil, hal.ErrNotSupported
 	}
@@ -157,25 +152,25 @@ func (c vmChassis) GetBootFlags(_ context.Context) (*ipmi.BootOptionParam_BootFl
 		return nil, hal.ErrNotSupported
 	}
 
-	flags := &ipmi.BootOptionParam_BootFlags{
+	flags := &types.BootOptionParam_BootFlags{
 		BootFlagsValid: state.OverrideActive,
 		Persist:        state.Mode == resourcemanager.BootModePersistent,
-		BIOSBootType:   ipmi.BIOSBootType(state.EFIBoot),
+		BIOSBootType:   types.BIOSBootType(state.EFIBoot),
 	}
 
 	if state.OverrideActive {
 		switch state.BootDevice {
 		case resourcemanager.BootDevicePxe:
-			flags.BootDeviceSelector = ipmi.BootDeviceSelectorForcePXE
+			flags.BootDeviceSelector = types.BootDeviceSelectorForcePXE
 		case resourcemanager.BootDeviceHdd:
-			flags.BootDeviceSelector = ipmi.BootDeviceSelectorForceHardDrive
+			flags.BootDeviceSelector = types.BootDeviceSelectorForceHardDrive
 		case resourcemanager.BootDeviceCd:
-			flags.BootDeviceSelector = ipmi.BootDeviceSelectorForceCDROM
+			flags.BootDeviceSelector = types.BootDeviceSelectorForceCDROM
 		default:
-			flags.BootDeviceSelector = ipmi.BootDeviceSelectorNoOverride
+			flags.BootDeviceSelector = types.BootDeviceSelectorNoOverride
 		}
 	} else {
-		flags.BootDeviceSelector = ipmi.BootDeviceSelectorNoOverride
+		flags.BootDeviceSelector = types.BootDeviceSelectorNoOverride
 	}
 
 	return flags, nil
@@ -183,7 +178,7 @@ func (c vmChassis) GetBootFlags(_ context.Context) (*ipmi.BootOptionParam_BootFl
 
 // SetBootInfoAcknowledge is accepted as a no-op (spec §28.14 explicitly allows
 // a no-op HAL). KubeVirt has no corresponding concept.
-func (vmChassis) SetBootInfoAcknowledge(_ context.Context, ack *ipmi.BootOptionParam_BootInfoAcknowledge) error {
+func (vmChassis) SetBootInfoAcknowledge(_ context.Context, ack *types.BootOptionParam_BootInfoAcknowledge) error {
 	if ack == nil {
 		return hal.ErrNotSupported
 	}
@@ -192,7 +187,7 @@ func (vmChassis) SetBootInfoAcknowledge(_ context.Context, ack *ipmi.BootOptionP
 
 // GetBootInfoAcknowledge always returns ErrNotSupported (→ 0x80); the value is
 // not persisted anywhere.
-func (vmChassis) GetBootInfoAcknowledge(context.Context) (*ipmi.BootOptionParam_BootInfoAcknowledge, error) {
+func (vmChassis) GetBootInfoAcknowledge(context.Context) (*types.BootOptionParam_BootInfoAcknowledge, error) {
 	return nil, hal.ErrNotSupported
 }
 
@@ -201,13 +196,13 @@ func (vmChassis) GetBootInfoAcknowledge(context.Context) (*ipmi.BootOptionParam_
 // patch only distinguishes the three categories ipmitool exposes (pxe/disk/
 // cdrom); other selectors (diagnostic partition, BIOS setup, floppy, remote
 // media, no-override) are acknowledged without a KubeVirt side effect.
-func kubevirtBootDevice(selector ipmi.BootDeviceSelector) (resourcemanager.BootDevice, bool) {
+func kubevirtBootDevice(selector types.BootDeviceSelector) (resourcemanager.BootDevice, bool) {
 	switch selector {
-	case ipmi.BootDeviceSelectorForcePXE:
+	case types.BootDeviceSelectorForcePXE:
 		return resourcemanager.BootDevicePxe, true
-	case ipmi.BootDeviceSelectorForceHardDrive, ipmi.BootDeviceSelectorForceHardDriveSafe:
+	case types.BootDeviceSelectorForceHardDrive, types.BootDeviceSelectorForceHardDriveSafe:
 		return resourcemanager.BootDeviceHdd, true
-	case ipmi.BootDeviceSelectorForceCDROM:
+	case types.BootDeviceSelectorForceCDROM:
 		return resourcemanager.BootDeviceCd, true
 	default:
 		return "", false

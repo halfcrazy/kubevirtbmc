@@ -94,11 +94,17 @@ func (r *VirtualMachineBMCReconciler) createVirtBMCDeployment(virtualMachineBMC 
 							Name:  virtBMCContainerName,
 							Image: fmt.Sprintf("%s:%s", r.AgentImageName, r.AgentImageTag),
 							Args: func() []string {
+								logLevel := r.AgentLogLevel
+								if logLevel == "" {
+									logLevel = "info"
+								}
 								args := []string{
 									"--address",
 									"0.0.0.0",
 									"--redfish-port",
 									strconv.Itoa(redfishPort),
+									"--log-level",
+									logLevel,
 								}
 								if specIPMIEnabled(&virtualMachineBMC.Spec) {
 									args = append(args, "--enable-ipmi", "--ipmi-port", strconv.Itoa(ipmiPort))
@@ -158,7 +164,7 @@ func (r *VirtualMachineBMCReconciler) createVirtBMCDeployment(virtualMachineBMC 
 							ReadinessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
 									HTTPGet: &corev1.HTTPGetAction{
-										Path: "/redfish/v1",
+										Path: "/healthz",
 										Port: intstr.FromString(redfishPortName),
 									},
 								},

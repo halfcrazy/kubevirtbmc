@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/sirupsen/logrus"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -17,6 +17,7 @@ import (
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	cdiclient "kubevirt.io/client-go/containerizeddataimporter"
 	kvclient "kubevirt.io/client-go/kubevirt"
+	"kubevirt.io/kubevirtbmc/pkg/accesslog"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
@@ -45,7 +46,6 @@ var (
 )
 
 type VirtualMachineResourceManager struct {
-	ctx        context.Context
 	virtClient kvclient.Interface
 	cdiClient  cdiclient.Interface
 	bmcClient  client.Client
@@ -61,14 +61,12 @@ type VirtualMachineResourceManager struct {
 }
 
 func NewVirtualMachineResourceManager(
-	ctx context.Context,
 	virtClient kvclient.Interface,
 	cdiClient cdiclient.Interface,
 	bmcClient client.Client,
 	bmcName string,
 ) *VirtualMachineResourceManager {
 	return &VirtualMachineResourceManager{
-		ctx:        ctx,
 		virtClient: virtClient,
 		cdiClient:  cdiClient,
 		bmcClient:  bmcClient,
@@ -76,8 +74,8 @@ func NewVirtualMachineResourceManager(
 	}
 }
 
-func (m *VirtualMachineResourceManager) Initialize(namespace, name string) error {
-	vm, err := m.virtClient.KubevirtV1().VirtualMachines(namespace).Get(m.ctx, name, metav1.GetOptions{})
+func (m *VirtualMachineResourceManager) Initialize(ctx context.Context, namespace, name string) error {
+	vm, err := m.virtClient.KubevirtV1().VirtualMachines(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -114,14 +112,14 @@ func (m *VirtualMachineResourceManager) Initialize(namespace, name string) error
 	return nil
 }
 
-func (m *VirtualMachineResourceManager) GetComputerSystem() (ComputerSystemInterface, error) {
+func (m *VirtualMachineResourceManager) GetComputerSystem(ctx context.Context) (ComputerSystemInterface, error) {
 	if m.computerSystem == nil {
 		return nil, fmt.Errorf("computer system not initialized")
 	}
 
 	// Update the power state just-in-time until we actually implement a control loop for it
 	vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+		Get(ctx, m.name, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -136,28 +134,28 @@ func (m *VirtualMachineResourceManager) GetComputerSystem() (ComputerSystemInter
 	return m.computerSystem, nil
 }
 
-func (m *VirtualMachineResourceManager) GetManager() (ManagerInterface, error) {
+func (m *VirtualMachineResourceManager) GetManager(ctx context.Context) (ManagerInterface, error) {
 	return m.manager, nil
 }
 
-func (m *VirtualMachineResourceManager) GetVirtualMedia() (VirtualMediaInterface, error) {
+func (m *VirtualMachineResourceManager) GetVirtualMedia(ctx context.Context) (VirtualMediaInterface, error) {
 	return m.virtualMedia, nil
 }
 
-func (m *VirtualMachineResourceManager) GetSystemUUID() (string, error) {
+func (m *VirtualMachineResourceManager) GetSystemUUID(ctx context.Context) (string, error) {
 	if m.systemUUID == "" {
 		return "", fmt.Errorf("system UUID not initialized")
 	}
 	return m.systemUUID, nil
 }
 
-func (m *VirtualMachineResourceManager) EjectMedia() error {
+func (m *VirtualMachineResourceManager) EjectMedia(ctx context.Context) error {
 	if m.virtualMedia == nil {
 		return fmt.Errorf("virtual media not initialized")
 	}
 
 	vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+		Get(ctx, m.name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -185,11 +183,11 @@ func (m *VirtualMachineResourceManager) EjectMedia() error {
 	}
 
 	if _, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Update(m.ctx, vm, metav1.UpdateOptions{}); err != nil {
+		Update(ctx, vm, metav1.UpdateOptions{}); err != nil {
 		return err
 	}
 
-	if err := m.cdiClient.CdiV1beta1().DataVolumes(m.namespace).Delete(m.ctx, dvName, metav1.DeleteOptions{}); err != nil {
+	if err := m.cdiClient.CdiV1beta1().DataVolumes(m.namespace).Delete(ctx, dvName, metav1.DeleteOptions{}); err != nil {
 		return err
 	}
 
@@ -198,13 +196,13 @@ func (m *VirtualMachineResourceManager) EjectMedia() error {
 	return nil
 }
 
-func (m *VirtualMachineResourceManager) InsertMedia(imageURL string) error {
+func (m *VirtualMachineResourceManager) InsertMedia(ctx context.Context, imageURL string) error {
 	if m.virtualMedia == nil {
 		return fmt.Errorf("virtual media not initialized")
 	}
 
 	vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+		Get(ctx, m.name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -228,7 +226,7 @@ func (m *VirtualMachineResourceManager) InsertMedia(imageURL string) error {
 
 	if m.bmcClient != nil {
 		var bmc bmcv1.VirtualMachineBMC
-		if err := m.bmcClient.Get(m.ctx, types.NamespacedName{Namespace: m.namespace, Name: m.bmcName}, &bmc); err != nil {
+		if err := m.bmcClient.Get(ctx, types.NamespacedName{Namespace: m.namespace, Name: m.bmcName}, &bmc); err != nil {
 			if !apierrors.IsNotFound(err) {
 				return err
 			}
@@ -239,7 +237,7 @@ func (m *VirtualMachineResourceManager) InsertMedia(imageURL string) error {
 
 	// Create DataVolume
 	dv := util.ConstructDataVolume(m.namespace, m.name, imageURL, imageSize, storageClassName)
-	_, err = m.cdiClient.CdiV1beta1().DataVolumes(m.namespace).Create(m.ctx, dv, metav1.CreateOptions{})
+	_, err = m.cdiClient.CdiV1beta1().DataVolumes(m.namespace).Create(ctx, dv, metav1.CreateOptions{})
 	if err != nil {
 		return err
 	}
@@ -257,7 +255,7 @@ func (m *VirtualMachineResourceManager) InsertMedia(imageURL string) error {
 	vm.Spec.Template.Spec.Volumes = append(vm.Spec.Template.Spec.Volumes, volume)
 
 	if _, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Update(m.ctx, vm, metav1.UpdateOptions{}); err != nil {
+		Update(ctx, vm, metav1.UpdateOptions{}); err != nil {
 		return err
 	}
 
@@ -266,7 +264,7 @@ func (m *VirtualMachineResourceManager) InsertMedia(imageURL string) error {
 	return nil
 }
 
-func (m *VirtualMachineResourceManager) GetPowerStatus() (bool, error) {
+func (m *VirtualMachineResourceManager) GetPowerStatus(ctx context.Context) (bool, error) {
 	// TODO: Implement a control loop to keep the power state in sync, then we will be able to
 	// return the power state from the intermediate object, i.e. ComputerSystem.
 	//
@@ -280,7 +278,7 @@ func (m *VirtualMachineResourceManager) GetPowerStatus() (bool, error) {
 	// 	return false, nil
 	// }
 	vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+		Get(ctx, m.name, metav1.GetOptions{})
 	if err != nil {
 		return false, err
 	}
@@ -327,16 +325,16 @@ func hasPendingStopRequest(requests []kubevirtv1.VirtualMachineStateChangeReques
 	return false
 }
 
-func (m *VirtualMachineResourceManager) PowerOn() error {
+func (m *VirtualMachineResourceManager) PowerOn(ctx context.Context) error {
 	// Try-Then-Verify: call Start first, then check VM real state on
 	// failure, avoiding dependency on KubeVirt error strings.
 	err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Start(m.ctx, m.name, &kubevirtv1.StartOptions{})
+		Start(ctx, m.name, &kubevirtv1.StartOptions{})
 	if err == nil {
 		return nil
 	}
 	vm, getErr := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+		Get(ctx, m.name, metav1.GetOptions{})
 	if getErr != nil {
 		return fmt.Errorf("start failed: %w; verify state also failed: %v", err, getErr)
 	}
@@ -366,7 +364,7 @@ func (m *VirtualMachineResourceManager) PowerOn() error {
 		(rs == kubevirtv1.RunStrategyManual || rs == kubevirtv1.RunStrategyRerunOnFailure) &&
 		!hasPendingStopRequest(vm.Status.StateChangeRequests) {
 		vmi, vmiErr := m.virtClient.KubevirtV1().VirtualMachineInstances(m.namespace).
-			Get(m.ctx, m.name, metav1.GetOptions{})
+			Get(ctx, m.name, metav1.GetOptions{})
 		if vmiErr == nil && !vmi.IsFinal() {
 			return nil
 		}
@@ -375,14 +373,14 @@ func (m *VirtualMachineResourceManager) PowerOn() error {
 	return &ErrRetryable{Err: err}
 }
 
-func (m *VirtualMachineResourceManager) PowerOff() error {
+func (m *VirtualMachineResourceManager) PowerOff(ctx context.Context) error {
 	err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Stop(m.ctx, m.name, &kubevirtv1.StopOptions{})
+		Stop(ctx, m.name, &kubevirtv1.StopOptions{})
 	if err == nil {
 		return nil
 	}
 	vm, getErr := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+		Get(ctx, m.name, metav1.GetOptions{})
 	if getErr != nil {
 		return fmt.Errorf("stop failed: %w; verify state also failed: %v", err, getErr)
 	}
@@ -395,14 +393,14 @@ func (m *VirtualMachineResourceManager) PowerOff() error {
 	return &ErrRetryable{Err: err}
 }
 
-func (m *VirtualMachineResourceManager) ForcePowerOff() error {
+func (m *VirtualMachineResourceManager) ForcePowerOff(ctx context.Context) error {
 	err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Stop(m.ctx, m.name, &kubevirtv1.StopOptions{GracePeriod: ptr.To[int64](0)})
+		Stop(ctx, m.name, &kubevirtv1.StopOptions{GracePeriod: ptr.To[int64](0)})
 	if err == nil {
 		return nil
 	}
 	vm, getErr := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+		Get(ctx, m.name, metav1.GetOptions{})
 	if getErr != nil {
 		return fmt.Errorf("force stop failed: %w; verify state also failed: %v", err, getErr)
 	}
@@ -413,19 +411,23 @@ func (m *VirtualMachineResourceManager) ForcePowerOff() error {
 	return &ErrRetryable{Err: err}
 }
 
-func (m *VirtualMachineResourceManager) PowerCycle() error {
-	return m.powerCycle(false)
+func (m *VirtualMachineResourceManager) PowerCycle(ctx context.Context) error {
+	return m.powerCycle(ctx, false)
 }
 
-func (m *VirtualMachineResourceManager) ForcePowerCycle() error {
-	return m.powerCycle(true)
+func (m *VirtualMachineResourceManager) ForcePowerCycle(ctx context.Context) error {
+	return m.powerCycle(ctx, true)
 }
 
 // powerCycle restarts whenever the VM is up or a non-final VMI is present;
 // only an absent/final VMI falls back to PowerOn (PowerOn with a live VMI
 // is a silent no-op under RunStrategyAlways). force sets GracePeriodSeconds=0.
-func (m *VirtualMachineResourceManager) powerCycle(force bool) error {
-	isUp, err := m.GetPowerStatus()
+//
+// The path taken is recorded onto the access-log line rather than logged
+// outright: the caller asked for a reset, so which KubeVirt verb served it only
+// matters alongside the outcome of that request.
+func (m *VirtualMachineResourceManager) powerCycle(ctx context.Context, force bool) error {
+	isUp, err := m.GetPowerStatus(ctx)
 	if err != nil {
 		return err
 	}
@@ -434,30 +436,32 @@ func (m *VirtualMachineResourceManager) powerCycle(force bool) error {
 		opts.GracePeriodSeconds = ptr.To[int64](0)
 	}
 	if isUp {
-		return m.restartOrVerify(opts)
+		return m.restartOrVerify(ctx, opts)
 	}
 	vmi, vmiErr := m.virtClient.KubevirtV1().VirtualMachineInstances(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+		Get(ctx, m.name, metav1.GetOptions{})
 	if vmiErr == nil && !vmi.IsFinal() {
-		logrus.Warnf("PowerCycle(force=%v): VM %s/%s not Ready but VMI present (phase=%s), issuing Restart",
-			force, m.namespace, m.name, vmi.Status.Phase)
-		return m.restartOrVerify(opts)
+		accesslog.Record(ctx, logrus.Fields{
+			"power_cycle": "restart",
+			"vm_ready":    false,
+			"vmi_phase":   vmi.Status.Phase,
+		})
+		return m.restartOrVerify(ctx, opts)
 	}
-	logrus.Warnf("PowerCycle(force=%v): VM %s/%s not Ready, falling back to PowerOn",
-		force, m.namespace, m.name)
-	return m.PowerOn()
+	accesslog.Record(ctx, logrus.Fields{"power_cycle": "power_on", "vm_ready": false})
+	return m.PowerOn(ctx)
 }
 
 // restartOrVerify issues Restart and, on failure, classifies the outcome via
 // the same Try-Then-Verify pattern as PowerOn/PowerOff.
-func (m *VirtualMachineResourceManager) restartOrVerify(opts *kubevirtv1.RestartOptions) error {
+func (m *VirtualMachineResourceManager) restartOrVerify(ctx context.Context, opts *kubevirtv1.RestartOptions) error {
 	err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Restart(m.ctx, m.name, opts)
+		Restart(ctx, m.name, opts)
 	if err == nil {
 		return nil
 	}
 	vm, getErr := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+		Get(ctx, m.name, metav1.GetOptions{})
 	if getErr != nil {
 		return fmt.Errorf("restart failed: %w; verify state also failed: %v", err, getErr)
 	}
@@ -471,19 +475,20 @@ func (m *VirtualMachineResourceManager) restartOrVerify(opts *kubevirtv1.Restart
 		return &ErrRetryable{Err: err}
 	}
 	vmi, vmiErr := m.virtClient.KubevirtV1().VirtualMachineInstances(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+		Get(ctx, m.name, metav1.GetOptions{})
 	if vmiErr == nil && !vmi.IsFinal() {
 		return &ErrRetryable{Err: err}
 	}
 	// VMI gone between GetPowerStatus and Restart: complete the cycle via PowerOn.
-	return m.PowerOn()
+	accesslog.Record(ctx, logrus.Fields{"power_cycle": "power_on"})
+	return m.PowerOn(ctx)
 }
 
 // GetBootFlags derives the current boot flags — boot device (lowest bootOrder),
 // firmware type, and persistence mode — from the VM template spec and
 // status.bootOverride on the VirtualMachineBMC CR.
-func (m *VirtualMachineResourceManager) GetBootFlags() (*BootFlagsState, error) {
-	disks, ifaces := m.getBootDevices()
+func (m *VirtualMachineResourceManager) GetBootFlags(ctx context.Context) (*BootFlagsState, error) {
+	disks, ifaces := m.getBootDevices(ctx)
 	if len(disks) == 0 && len(ifaces) == 0 {
 		return nil, fmt.Errorf("no bootable devices found")
 	}
@@ -495,7 +500,7 @@ func (m *VirtualMachineResourceManager) GetBootFlags() (*BootFlagsState, error) 
 
 	overrideActive := false
 	mode := BootModePersistent
-	override, err := m.GetBootOverride()
+	override, err := m.GetBootOverride(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check boot override status: %w", err)
 	}
@@ -506,7 +511,7 @@ func (m *VirtualMachineResourceManager) GetBootFlags() (*BootFlagsState, error) 
 		}
 	}
 
-	efi := m.isEFIBoot()
+	efi := m.isEFIBoot(ctx)
 
 	return &BootFlagsState{
 		BootDevice:     bootDev,
@@ -520,11 +525,11 @@ func (m *VirtualMachineResourceManager) GetBootFlags() (*BootFlagsState, error) 
 // The VM spec is the authoritative source for "what will boot next": KubeVirt
 // does not live-update a running VMI when the VM template changes (the VM is
 // marked RestartRequired instead), so the VMI may be stale after SetBootDevice.
-func (m *VirtualMachineResourceManager) getBootDevices() ([]kubevirtv1.Disk, []kubevirtv1.Interface) {
+func (m *VirtualMachineResourceManager) getBootDevices(ctx context.Context) ([]kubevirtv1.Disk, []kubevirtv1.Interface) {
 	vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+		Get(ctx, m.name, metav1.GetOptions{})
 	if err != nil {
-		logrus.WithError(err).Warn("failed to get VM for boot flags readback")
+		accesslog.Logger(ctx).WithError(err).Warn("failed to get VM for boot flags readback")
 		return nil, nil
 	}
 	if vm.Spec.Template == nil {
@@ -572,9 +577,9 @@ func findFirstBootDevice(disks []kubevirtv1.Disk, ifaces []kubevirtv1.Interface)
 }
 
 // isEFIBoot returns true if the VM firmware bootloader is set to EFI.
-func (m *VirtualMachineResourceManager) isEFIBoot() bool {
+func (m *VirtualMachineResourceManager) isEFIBoot(ctx context.Context) bool {
 	vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+		Get(ctx, m.name, metav1.GetOptions{})
 	if err != nil {
 		return false
 	}
@@ -584,27 +589,16 @@ func (m *VirtualMachineResourceManager) isEFIBoot() bool {
 	return !currentFirmwareIsBios(vm)
 }
 
-// efiBootLogValue renders the EFIBoot tri-state for logs: nil (firmware
-// untouched) must read differently from an explicit false.
-func efiBootLogValue(efiBoot *bool) string {
-	if efiBoot == nil {
-		return "unset"
-	}
-	return strconv.FormatBool(*efiBoot)
-}
-
-func (m *VirtualMachineResourceManager) SetBootDevice(bootDevice BootDevice, opts *BootOptions) error {
+func (m *VirtualMachineResourceManager) SetBootDevice(ctx context.Context, bootDevice BootDevice, opts *BootOptions) error {
 	// Default to persistent when no options provided.
 	if opts == nil {
 		opts = &BootOptions{Mode: BootModePersistent}
 	}
 
-	logrus.Infof("SetBootDevice: %s (mode=%s, efi=%s)", bootDevice, opts.Mode, efiBootLogValue(opts.EFIBoot))
-
 	// Fetch the VM only to discover device indices for patch paths.
 	// The actual mutation is done via JSON Patch to avoid full-UPDATE races.
 	vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+		Get(ctx, m.name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -684,23 +678,23 @@ func (m *VirtualMachineResourceManager) SetBootDevice(bootDevice BootDevice, opt
 		}
 
 		if _, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-			Patch(m.ctx, m.name, types.JSONPatchType, patchData, metav1.PatchOptions{}); err != nil {
-			logrus.WithError(err).Error("patch vm error")
-			return err
+			Patch(ctx, m.name, types.JSONPatchType, patchData, metav1.PatchOptions{}); err != nil {
+			return fmt.Errorf("failed to patch VM boot devices: %w", err)
 		}
 	}
 
-	if err := m.handleBootOrderBackup(vm, disks, ifaces, opts); err != nil {
+	if err := m.handleBootOrderBackup(ctx, vm, disks, ifaces, opts); err != nil {
 		return err
 	}
 
-	m.updateComputerSystemBootState(bootDevice, opts)
+	m.updateComputerSystemBootState(ctx, bootDevice, opts)
 	return nil
 }
 
 // handleBootOrderBackup saves a oneshot backup or a persistent override marker
 // to status.bootOverride based on the boot mode. Call after the VM patch succeeds.
 func (m *VirtualMachineResourceManager) handleBootOrderBackup(
+	ctx context.Context,
 	vm *kubevirtv1.VirtualMachine,
 	disks []kubevirtv1.Disk,
 	ifaces []kubevirtv1.Interface,
@@ -712,7 +706,7 @@ func (m *VirtualMachineResourceManager) handleBootOrderBackup(
 		// rebooted): the boot order captured on the first oneshot is the
 		// state to restore. A persistent marker carries no boot order
 		// data, so overwrite it with a fresh backup.
-		existing, err := m.GetBootOverride()
+		existing, err := m.GetBootOverride(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to check for existing boot override: %w", err)
 		}
@@ -727,7 +721,7 @@ func (m *VirtualMachineResourceManager) handleBootOrderBackup(
 
 		// A VMI UID change after this backup means the oneshot was consumed.
 		if vmi, err := m.virtClient.KubevirtV1().VirtualMachineInstances(m.namespace).
-			Get(m.ctx, m.name, metav1.GetOptions{}); err == nil {
+			Get(ctx, m.name, metav1.GetOptions{}); err == nil {
 			override.VMIUID = string(vmi.UID)
 		}
 
@@ -746,11 +740,11 @@ func (m *VirtualMachineResourceManager) handleBootOrderBackup(
 			override.BootOrders[interfaceBackupKey(iface)] = bootOrderValue(iface.BootOrder)
 		}
 
-		if err := m.saveBootOverride(override); err != nil {
+		if err := m.saveBootOverride(ctx, override); err != nil {
 			return fmt.Errorf("failed to save boot override: %w", err)
 		}
 	case BootModePersistent:
-		if err := m.saveBootOverride(&bmcv1.BootOverrideStatus{
+		if err := m.saveBootOverride(ctx, &bmcv1.BootOverrideStatus{
 			Mode: bmcv1.BootOverrideModePersistent,
 		}); err != nil {
 			return fmt.Errorf("failed to save persistent override marker: %w", err)
@@ -761,9 +755,9 @@ func (m *VirtualMachineResourceManager) handleBootOrderBackup(
 
 // updateComputerSystemBootState updates the Redfish ComputerSystem model
 // with the boot override mode and optional firmware mode.
-func (m *VirtualMachineResourceManager) updateComputerSystemBootState(bootDevice BootDevice, opts *BootOptions) {
+func (m *VirtualMachineResourceManager) updateComputerSystemBootState(ctx context.Context, bootDevice BootDevice, opts *BootOptions) {
 	if m.computerSystem == nil {
-		logrus.Warn("computer system not initialized")
+		accesslog.Logger(ctx).Warn("computer system not initialized")
 		return
 	}
 
@@ -782,9 +776,7 @@ func (m *VirtualMachineResourceManager) updateComputerSystemBootState(bootDevice
 	}
 }
 
-func (m *VirtualMachineResourceManager) SetFirmwareMode(mode FirmwareMode) error {
-	logrus.Infof("SetFirmwareMode: %s", mode)
-
+func (m *VirtualMachineResourceManager) SetFirmwareMode(ctx context.Context, mode FirmwareMode) error {
 	var efi bool
 	switch mode {
 	case FirmwareModeUEFI:
@@ -796,7 +788,7 @@ func (m *VirtualMachineResourceManager) SetFirmwareMode(mode FirmwareMode) error
 	}
 
 	vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+		Get(ctx, m.name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -812,14 +804,13 @@ func (m *VirtualMachineResourceManager) SetFirmwareMode(mode FirmwareMode) error
 		}
 
 		if _, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-			Patch(m.ctx, m.name, types.JSONPatchType, patchData, metav1.PatchOptions{}); err != nil {
-			logrus.WithError(err).Error("patch vm error")
-			return err
+			Patch(ctx, m.name, types.JSONPatchType, patchData, metav1.PatchOptions{}); err != nil {
+			return fmt.Errorf("failed to patch VM firmware mode: %w", err)
 		}
 	}
 
 	if m.computerSystem == nil {
-		logrus.Warn("computer system not initialized")
+		accesslog.Logger(ctx).Warn("computer system not initialized")
 		return nil
 	}
 	m.computerSystem.SetFirmwareMode(mode)
@@ -834,11 +825,9 @@ func (m *VirtualMachineResourceManager) SetFirmwareMode(mode FirmwareMode) error
 // Note: if the override was persistent (no backup), device bootOrders are left
 // as-is since there is no saved "original" state to restore to. The
 // ComputerSystem override is still marked Disabled.
-func (m *VirtualMachineResourceManager) ClearBootOverrides() error {
-	logrus.Info("ClearBootOverrides")
-
+func (m *VirtualMachineResourceManager) ClearBootOverrides(ctx context.Context) error {
 	vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+		Get(ctx, m.name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -848,7 +837,7 @@ func (m *VirtualMachineResourceManager) ClearBootOverrides() error {
 	}
 
 	// If a oneshot backup exists, restore the original boot order from it.
-	override, err := m.GetBootOverride()
+	override, err := m.GetBootOverride(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read boot override status: %w", err)
 	}
@@ -865,14 +854,13 @@ func (m *VirtualMachineResourceManager) ClearBootOverrides() error {
 		}
 
 		if _, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-			Patch(m.ctx, m.name, types.JSONPatchType, patchData, metav1.PatchOptions{}); err != nil {
-			logrus.WithError(err).Error("patch vm error")
-			return err
+			Patch(ctx, m.name, types.JSONPatchType, patchData, metav1.PatchOptions{}); err != nil {
+			return fmt.Errorf("failed to restore VM boot order: %w", err)
 		}
 	}
 
-	if err := m.clearBootOverride(); err != nil {
-		logrus.WithError(err).Warn("failed to clear boot override during ClearBootOverrides")
+	if err := m.clearBootOverride(ctx); err != nil {
+		accesslog.Logger(ctx).WithError(err).Warn("failed to clear boot override status")
 	}
 
 	if m.computerSystem != nil {
@@ -886,14 +874,14 @@ func (m *VirtualMachineResourceManager) ClearBootOverrides() error {
 // VirtualMachineBMC CR. Read-modify-write with conflict retry REPLACES the
 // whole bootOverride value — a merge patch would linger stale keys from a
 // previous override (e.g. bootOrders surviving a oneshot→persistent overwrite).
-func (m *VirtualMachineResourceManager) saveBootOverride(override *bmcv1.BootOverrideStatus) error {
+func (m *VirtualMachineResourceManager) saveBootOverride(ctx context.Context, override *bmcv1.BootOverrideStatus) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		bmc := &bmcv1.VirtualMachineBMC{}
-		if err := m.bmcClient.Get(m.ctx, client.ObjectKey{Namespace: m.namespace, Name: m.bmcName}, bmc); err != nil {
+		if err := m.bmcClient.Get(ctx, client.ObjectKey{Namespace: m.namespace, Name: m.bmcName}, bmc); err != nil {
 			return fmt.Errorf("failed to get VirtualMachineBMC: %w", err)
 		}
 		bmc.Status.BootOverride = override
-		if err := m.bmcClient.Status().Update(m.ctx, bmc); err != nil {
+		if err := m.bmcClient.Status().Update(ctx, bmc); err != nil {
 			return fmt.Errorf("failed to update VirtualMachineBMC status: %w", err)
 		}
 		return nil
@@ -901,10 +889,10 @@ func (m *VirtualMachineResourceManager) saveBootOverride(override *bmcv1.BootOve
 }
 
 // clearBootOverride removes status.bootOverride from the VirtualMachineBMC CR.
-func (m *VirtualMachineResourceManager) clearBootOverride() error {
+func (m *VirtualMachineResourceManager) clearBootOverride(ctx context.Context) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		bmc := &bmcv1.VirtualMachineBMC{}
-		if err := m.bmcClient.Get(m.ctx, client.ObjectKey{Namespace: m.namespace, Name: m.bmcName}, bmc); err != nil {
+		if err := m.bmcClient.Get(ctx, client.ObjectKey{Namespace: m.namespace, Name: m.bmcName}, bmc); err != nil {
 			if apierrors.IsNotFound(err) {
 				return nil
 			}
@@ -914,7 +902,7 @@ func (m *VirtualMachineResourceManager) clearBootOverride() error {
 			return nil
 		}
 		bmc.Status.BootOverride = nil
-		if err := m.bmcClient.Status().Update(m.ctx, bmc); err != nil {
+		if err := m.bmcClient.Status().Update(ctx, bmc); err != nil {
 			return fmt.Errorf("failed to update VirtualMachineBMC status: %w", err)
 		}
 		return nil
@@ -1176,9 +1164,9 @@ func buildBootOrderRestoreOps(path string, currentOrder, savedOrder *uint, saved
 
 // GetBootOverride reads status.bootOverride from the VirtualMachineBMC CR.
 // Returns nil (without error) when no override is recorded.
-func (m *VirtualMachineResourceManager) GetBootOverride() (*bmcv1.BootOverrideStatus, error) {
+func (m *VirtualMachineResourceManager) GetBootOverride(ctx context.Context) (*bmcv1.BootOverrideStatus, error) {
 	bmc := &bmcv1.VirtualMachineBMC{}
-	if err := m.bmcClient.Get(m.ctx, client.ObjectKey{Namespace: m.namespace, Name: m.bmcName}, bmc); err != nil {
+	if err := m.bmcClient.Get(ctx, client.ObjectKey{Namespace: m.namespace, Name: m.bmcName}, bmc); err != nil {
 		return nil, err
 	}
 	return bmc.Status.BootOverride, nil

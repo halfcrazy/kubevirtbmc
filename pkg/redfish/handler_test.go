@@ -1,6 +1,7 @@
 package redfish
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,8 +27,8 @@ func expectSetBootDevice(
 ) {
 	t.Helper()
 	mockRM.EXPECT().
-		SetBootDevice(device, gomock.AssignableToTypeOf(&resourcemanager.BootOptions{})).
-		DoAndReturn(func(_ resourcemanager.BootDevice, opts *resourcemanager.BootOptions) error {
+		SetBootDevice(gomock.Any(), device, gomock.AssignableToTypeOf(&resourcemanager.BootOptions{})).
+		DoAndReturn(func(_ context.Context, _ resourcemanager.BootDevice, opts *resourcemanager.BootOptions) error {
 			assert.Equal(t, mode, opts.Mode)
 			assert.Nil(t, opts.EFIBoot)
 			return returnErr
@@ -44,8 +45,8 @@ func expectSetBootDeviceWithEFI(
 ) {
 	t.Helper()
 	mockRM.EXPECT().
-		SetBootDevice(device, gomock.AssignableToTypeOf(&resourcemanager.BootOptions{})).
-		DoAndReturn(func(_ resourcemanager.BootDevice, opts *resourcemanager.BootOptions) error {
+		SetBootDevice(gomock.Any(), device, gomock.AssignableToTypeOf(&resourcemanager.BootOptions{})).
+		DoAndReturn(func(_ context.Context, _ resourcemanager.BootDevice, opts *resourcemanager.BootOptions) error {
 			assert.Equal(t, mode, opts.Mode)
 			if assert.NotNil(t, opts.EFIBoot) {
 				assert.Equal(t, efiBoot, *opts.EFIBoot)
@@ -59,7 +60,7 @@ func expectSetFirmwareMode(
 	mode resourcemanager.FirmwareMode,
 	returnErr error,
 ) {
-	mockRM.EXPECT().SetFirmwareMode(mode).Return(returnErr)
+	mockRM.EXPECT().SetFirmwareMode(gomock.Any(), mode).Return(returnErr)
 }
 
 func TestAuthenticate(t *testing.T) {
@@ -197,7 +198,7 @@ func TestPatchComputerSystem(t *testing.T) {
 				BootSourceOverrideEnabled: server.COMPUTERSYSTEMV1220BOOTSOURCEOVERRIDEENABLED_DISABLED,
 			},
 			mockSetup: func() {
-				mockRM.EXPECT().ClearBootOverrides().Return(nil)
+				mockRM.EXPECT().ClearBootOverrides(gomock.Any()).Return(nil)
 			},
 			expectError: false,
 		},
@@ -348,7 +349,7 @@ func TestPatchComputerSystem(t *testing.T) {
 				BootSourceOverrideMode: server.COMPUTERSYSTEMV1220BOOTSOURCEOVERRIDEMODE_UEFI,
 			},
 			mockSetup: func() {
-				mockRM.EXPECT().GetBootOverride().Return(nil, nil)
+				mockRM.EXPECT().GetBootOverride(gomock.Any()).Return(nil, nil)
 				expectSetFirmwareMode(mockRM, resourcemanager.FirmwareModeUEFI, nil)
 			},
 			expectError: false,
@@ -359,7 +360,7 @@ func TestPatchComputerSystem(t *testing.T) {
 				BootSourceOverrideMode: server.COMPUTERSYSTEMV1220BOOTSOURCEOVERRIDEMODE_LEGACY,
 			},
 			mockSetup: func() {
-				mockRM.EXPECT().GetBootOverride().Return(nil, nil)
+				mockRM.EXPECT().GetBootOverride(gomock.Any()).Return(nil, nil)
 				expectSetFirmwareMode(mockRM, resourcemanager.FirmwareModeLegacy, nil)
 			},
 			expectError: false,
@@ -370,7 +371,7 @@ func TestPatchComputerSystem(t *testing.T) {
 				BootSourceOverrideMode: server.COMPUTERSYSTEMV1220BOOTSOURCEOVERRIDEMODE_UEFI,
 			},
 			mockSetup: func() {
-				mockRM.EXPECT().GetBootOverride().Return(nil, nil)
+				mockRM.EXPECT().GetBootOverride(gomock.Any()).Return(nil, nil)
 				expectSetFirmwareMode(mockRM, resourcemanager.FirmwareModeUEFI, assert.AnError)
 			},
 			expectError: true,
@@ -381,7 +382,7 @@ func TestPatchComputerSystem(t *testing.T) {
 				BootSourceOverrideTarget: server.COMPUTERSYSTEMBOOTSOURCE_CD,
 			},
 			mockSetup: func() {
-				mockRM.EXPECT().GetBootOverride().Return(&bmcv1.BootOverrideStatus{
+				mockRM.EXPECT().GetBootOverride(gomock.Any()).Return(&bmcv1.BootOverrideStatus{
 					Mode: bmcv1.BootOverrideModePersistent,
 				}, nil)
 				expectSetBootDevice(t, mockRM, resourcemanager.BootDeviceCd, resourcemanager.BootModePersistent, nil)
@@ -394,7 +395,7 @@ func TestPatchComputerSystem(t *testing.T) {
 				BootSourceOverrideTarget: server.COMPUTERSYSTEMBOOTSOURCE_PXE,
 			},
 			mockSetup: func() {
-				mockRM.EXPECT().GetBootOverride().Return(&bmcv1.BootOverrideStatus{
+				mockRM.EXPECT().GetBootOverride(gomock.Any()).Return(&bmcv1.BootOverrideStatus{
 					Mode: bmcv1.BootOverrideModeOneshot,
 				}, nil)
 				expectSetBootDevice(t, mockRM, resourcemanager.BootDevicePxe, resourcemanager.BootModeOneshot, nil)
@@ -407,7 +408,7 @@ func TestPatchComputerSystem(t *testing.T) {
 				BootSourceOverrideTarget: server.COMPUTERSYSTEMBOOTSOURCE_CD,
 			},
 			mockSetup: func() {
-				mockRM.EXPECT().GetBootOverride().Return(nil, nil)
+				mockRM.EXPECT().GetBootOverride(gomock.Any()).Return(nil, nil)
 			},
 			expectError: false,
 		},
@@ -417,7 +418,7 @@ func TestPatchComputerSystem(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.mockSetup()
 
-			err := handler.PatchComputerSystem(&server.ComputerSystemV1220ComputerSystem{
+			err := handler.PatchComputerSystem(context.Background(), &server.ComputerSystemV1220ComputerSystem{
 				Boot: tc.boot,
 			})
 
@@ -447,7 +448,7 @@ func TestComputerSystemReset(t *testing.T) {
 			name:      "power on reset",
 			resetType: server.RESOURCERESETTYPE_ON,
 			mockSetup: func() {
-				mockRM.EXPECT().PowerOn().Return(nil)
+				mockRM.EXPECT().PowerOn(gomock.Any()).Return(nil)
 			},
 			expectedError: false,
 		},
@@ -455,7 +456,7 @@ func TestComputerSystemReset(t *testing.T) {
 			name:      "graceful shutdown reset",
 			resetType: server.RESOURCERESETTYPE_GRACEFUL_SHUTDOWN,
 			mockSetup: func() {
-				mockRM.EXPECT().PowerOff().Return(nil)
+				mockRM.EXPECT().PowerOff(gomock.Any()).Return(nil)
 			},
 			expectedError: false,
 		},
@@ -463,7 +464,7 @@ func TestComputerSystemReset(t *testing.T) {
 			name:      "force off reset",
 			resetType: server.RESOURCERESETTYPE_FORCE_OFF,
 			mockSetup: func() {
-				mockRM.EXPECT().ForcePowerOff().Return(nil)
+				mockRM.EXPECT().ForcePowerOff(gomock.Any()).Return(nil)
 			},
 			expectedError: false,
 		},
@@ -471,7 +472,7 @@ func TestComputerSystemReset(t *testing.T) {
 			name:      "graceful restart reset",
 			resetType: server.RESOURCERESETTYPE_GRACEFUL_RESTART,
 			mockSetup: func() {
-				mockRM.EXPECT().PowerCycle().Return(nil)
+				mockRM.EXPECT().PowerCycle(gomock.Any()).Return(nil)
 			},
 			expectedError: false,
 		},
@@ -479,7 +480,7 @@ func TestComputerSystemReset(t *testing.T) {
 			name:      "force restart reset",
 			resetType: server.RESOURCERESETTYPE_FORCE_RESTART,
 			mockSetup: func() {
-				mockRM.EXPECT().ForcePowerCycle().Return(nil)
+				mockRM.EXPECT().ForcePowerCycle(gomock.Any()).Return(nil)
 			},
 			expectedError: false,
 		},
@@ -494,7 +495,7 @@ func TestComputerSystemReset(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.mockSetup()
-			err := handler.ComputerSystemReset(tc.resetType)
+			err := handler.ComputerSystemReset(context.Background(), tc.resetType)
 			if tc.expectedError {
 				assert.Error(t, err)
 			} else {

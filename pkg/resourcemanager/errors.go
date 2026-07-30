@@ -3,7 +3,7 @@ package resourcemanager
 import (
 	"fmt"
 
-	goipmihandlers "github.com/bougou/go-ipmi/pkg/handlers"
+	"github.com/bougou/go-ipmi/pkg/types"
 )
 
 // ErrRetryable marks a KubeVirt operation that failed only due to a
@@ -20,11 +20,11 @@ func (e *ErrRetryable) Unwrap() error {
 	return e.Err
 }
 
-// As exposes [goipmihandlers.CodeNodeBusy] (0xC0) to errors.As so go-ipmi's
+// As exposes [types.CodeNodeBusy] (0xC0) to errors.As so go-ipmi's
 // chassis handler reports "node busy, retry later" (IPMI spec §5.2 Table 5-2).
 func (e *ErrRetryable) As(target any) bool {
-	if cc, ok := target.(*goipmihandlers.CompletionCode); ok {
-		*cc = goipmihandlers.CodeNodeBusy
+	if cc, ok := target.(*types.CompletionCode); ok {
+		*cc = types.CodeNodeBusy
 		return true
 	}
 	return false

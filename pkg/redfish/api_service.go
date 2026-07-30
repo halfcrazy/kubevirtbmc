@@ -30460,7 +30460,7 @@ func (s *APIService) RedfishV1ManagersGet(ctx context.Context) (server.ImplRespo
 
 // RedfishV1ManagersManagerIdGet -
 func (s *APIService) RedfishV1ManagersManagerIdGet(ctx context.Context, managerId string) (server.ImplResponse, error) {
-	manager, err := s.handler.GetManager()
+	manager, err := s.handler.GetManager(ctx)
 	if err != nil {
 		return server.Response(http.StatusInternalServerError, nil), err
 	}
@@ -34508,7 +34508,7 @@ func (s *APIService) RedfishV1ManagersManagerIdVirtualMediaGet(ctx context.Conte
 // RedfishV1ManagersManagerIdVirtualMediaVirtualMediaIdGet -
 // Deprecated
 func (s *APIService) RedfishV1ManagersManagerIdVirtualMediaVirtualMediaIdGet(ctx context.Context, managerId string, virtualMediaId string) (server.ImplResponse, error) {
-	virtualMedia, err := s.handler.GetVirtualMedia()
+	virtualMedia, err := s.handler.GetVirtualMedia(ctx)
 	if err != nil {
 		return server.Response(http.StatusInternalServerError, nil), err
 	}
@@ -34579,7 +34579,7 @@ func (s *APIService) RedfishV1ManagersManagerIdVirtualMediaVirtualMediaIdActions
 	// TODO: Uncomment the next line to return response Response(0, RedfishError{}) or use other options such as http.Ok ...
 	// return Response(0, RedfishError{}), nil
 
-	if err := s.handler.VirtualMediaEject(); err != nil {
+	if err := s.handler.VirtualMediaEject(ctx); err != nil {
 		return server.Response(http.StatusInternalServerError, server.RedfishError{
 			Error: server.RedfishErrorError{
 				MessageExtendedInfo: []server.MessageV120Message{
@@ -34624,7 +34624,7 @@ func (s *APIService) RedfishV1ManagersManagerIdVirtualMediaVirtualMediaIdActions
 		}), nil
 	}
 
-	if err := s.handler.VirtualMediaInsert(virtualMediaV163InsertMediaRequestBody.Image); err != nil {
+	if err := s.handler.VirtualMediaInsert(ctx, virtualMediaV163InsertMediaRequestBody.Image); err != nil {
 		return server.Response(http.StatusInternalServerError, server.RedfishError{
 			Error: server.RedfishErrorError{
 				MessageExtendedInfo: []server.MessageV120Message{
@@ -59710,7 +59710,7 @@ func (s *APIService) RedfishV1SystemsPost(ctx context.Context, computerSystemV12
 
 // RedfishV1SystemsComputerSystemIdGet -
 func (s *APIService) RedfishV1SystemsComputerSystemIdGet(ctx context.Context, computerSystemId string) (server.ImplResponse, error) {
-	computerSystem, err := s.handler.GetComputerSystem()
+	computerSystem, err := s.handler.GetComputerSystem(ctx)
 	if err != nil {
 		return server.Response(http.StatusInternalServerError, nil), err
 	}
@@ -59760,7 +59760,7 @@ func (s *APIService) RedfishV1SystemsComputerSystemIdDelete(ctx context.Context,
 
 // RedfishV1SystemsComputerSystemIdPatch -
 func (s *APIService) RedfishV1SystemsComputerSystemIdPatch(ctx context.Context, computerSystemId string, computerSystemV1220ComputerSystem server.ComputerSystemV1220ComputerSystem) (server.ImplResponse, error) {
-	if err := s.handler.PatchComputerSystem(&computerSystemV1220ComputerSystem); err != nil {
+	if err := s.handler.PatchComputerSystem(ctx, &computerSystemV1220ComputerSystem); err != nil {
 		return server.Response(http.StatusInternalServerError, server.RedfishError{
 			Error: server.RedfishErrorError{
 				MessageExtendedInfo: []server.MessageV120Message{
@@ -59860,7 +59860,7 @@ func (s *APIService) RedfishV1SystemsComputerSystemIdActionsComputerSystemResetP
 		}), nil
 	}
 
-	if err := s.handler.ComputerSystemReset(computerSystemV1220ResetRequestBody.ResetType); err != nil {
+	if err := s.handler.ComputerSystemReset(ctx, computerSystemV1220ResetRequestBody.ResetType); err != nil {
 		var retryable *resourcemanager.ErrRetryable
 		if errors.As(err, &retryable) {
 			// Signal a retryable state the way iLO does: OpenStack sushy
@@ -59930,7 +59930,7 @@ func (s *APIService) RedfishV1SystemsComputerSystemIdActionsComputerSystemSetDef
 		bootOrder[i] = str
 	}
 
-	if err := s.handler.ComputerSystemSetDefaultBootOrder(bootOrder); err != nil {
+	if err := s.handler.ComputerSystemSetDefaultBootOrder(ctx, bootOrder); err != nil {
 		return server.Response(http.StatusInternalServerError, server.RedfishError{
 			Error: server.RedfishErrorError{
 				MessageExtendedInfo: []server.MessageV120Message{

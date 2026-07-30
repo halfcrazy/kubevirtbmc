@@ -50,6 +50,7 @@ type VirtualMachineBMCReconciler struct {
 	AgentImageTag      string
 	AgentCPURequest    string
 	AgentMemoryRequest string
+	AgentLogLevel      string
 }
 
 const (

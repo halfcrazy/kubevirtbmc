@@ -7,24 +7,24 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	goipmihandlers "github.com/bougou/go-ipmi/pkg/handlers"
+	"github.com/bougou/go-ipmi/pkg/types"
 )
 
 // TestErrRetryableAsCompletionCode asserts errors.As extracts CodeNodeBusy
 // (0xC0) from ErrRetryable, directly and through %w wrapping.
 func TestErrRetryableAsCompletionCode(t *testing.T) {
 	original := &ErrRetryable{Err: fmt.Errorf("VM is not running")}
-	var cc goipmihandlers.CompletionCode
+	var cc types.CompletionCode
 	assert.True(t, errors.As(original, &cc),
 		"errors.As should extract CompletionCode from ErrRetryable")
-	assert.Equal(t, goipmihandlers.CodeNodeBusy, cc,
+	assert.Equal(t, types.CodeNodeBusy, cc,
 		"ErrRetryable should expose CodeNodeBusy (0xC0)")
 
 	wrapped := fmt.Errorf("chassis control failed: %w", original)
-	var cc2 goipmihandlers.CompletionCode
+	var cc2 types.CompletionCode
 	assert.True(t, errors.As(wrapped, &cc2),
 		"errors.As should extract CompletionCode through error wrapping")
-	assert.Equal(t, goipmihandlers.CodeNodeBusy, cc2)
+	assert.Equal(t, types.CodeNodeBusy, cc2)
 
 	var retryable *ErrRetryable
 	assert.True(t, errors.As(wrapped, &retryable))

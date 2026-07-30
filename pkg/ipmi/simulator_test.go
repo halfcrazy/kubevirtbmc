@@ -44,8 +44,8 @@ func TestBuildBMCNoUserWhenUsernameEmpty(t *testing.T) {
 // logic itself is exercised in handler_test.go.
 func TestBuildBMCHALExposesChassis(t *testing.T) {
 	rm := resourcemanager.NewMockResourceManager(gomock.NewController(t))
-	rm.EXPECT().GetSystemUUID().Return("00000000-0000-0000-0000-000000000000", nil)
-	rm.EXPECT().GetPowerStatus().Return(true, nil)
+	rm.EXPECT().GetSystemUUID(gomock.Any()).Return("00000000-0000-0000-0000-000000000000", nil)
+	rm.EXPECT().GetPowerStatus(gomock.Any()).Return(true, nil)
 	s := NewSimulator("127.0.0.1", 623, rm, "admin", "secret")
 
 	b := s.buildBMC()

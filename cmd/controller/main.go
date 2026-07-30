@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/sirupsen/logrus"
+
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -74,6 +76,7 @@ func main() {
 		agentImageTag        string
 		agentCPURequest      string
 		agentMemoryRequest   string
+		agentLogLevel        string
 	)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -84,6 +87,7 @@ func main() {
 	flag.StringVar(&agentImageTag, "agent-image-tag", AppVersion, "The tag of the agent image.")
 	flag.StringVar(&agentCPURequest, "agent-cpu-request", ctlvirtualmachinebmc.DefaultAgentCPURequest, "The CPU request of the agent pod.")
 	flag.StringVar(&agentMemoryRequest, "agent-memory-request", ctlvirtualmachinebmc.DefaultAgentMemoryRequest, "The memory request of the agent pod.")
+	flag.StringVar(&agentLogLevel, "agent-log-level", "info", "Log level for virtbmc agent pods (panic|fatal|error|warn|info|debug|trace).")
 	showVersion := flag.Bool("version", false, "Show version.")
 
 	opts := zap.Options{
@@ -107,6 +111,10 @@ func main() {
 	}
 	if _, err := resource.ParseQuantity(agentMemoryRequest); err != nil {
 		setupLog.Error(err, "invalid --agent-memory-request", "value", agentMemoryRequest)
+		os.Exit(1)
+	}
+	if _, err := logrus.ParseLevel(agentLogLevel); err != nil {
+		setupLog.Error(err, "invalid --agent-log-level", "value", agentLogLevel)
 		os.Exit(1)
 	}
 
@@ -167,6 +175,7 @@ func main() {
 		AgentImageTag:      agentImageTag,
 		AgentCPURequest:    agentCPURequest,
 		AgentMemoryRequest: agentMemoryRequest,
+		AgentLogLevel:      agentLogLevel,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VirtualMachineBMC")
 		os.Exit(1)

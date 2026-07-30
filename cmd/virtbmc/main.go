@@ -56,6 +56,11 @@ func main() {
 				Usage:       "enable IPMI support",
 				Destination: &options.EnableIPMI,
 			},
+			&cli.StringFlag{
+				Name:  "log-level",
+				Value: "info",
+				Usage: "log level (panic|fatal|error|warn|info|debug|trace)",
+			},
 			&cli.BoolFlag{
 				Name:    "version",
 				Aliases: []string{"v"},
@@ -71,6 +76,12 @@ func main() {
 			},
 		},
 		Action: func(cCtx *cli.Context) error {
+			level, err := logrus.ParseLevel(cCtx.String("log-level"))
+			if err != nil {
+				return fmt.Errorf("invalid --log-level: %w", err)
+			}
+			logrus.SetLevel(level)
+
 			options.BMCUser = os.Getenv("BMC_USERNAME")
 			options.BMCPassword = os.Getenv("BMC_PASSWORD")
 

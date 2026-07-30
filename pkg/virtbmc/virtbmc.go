@@ -61,7 +61,7 @@ func NewVirtBMC(ctx context.Context, options Options, inCluster bool) (*VirtBMC,
 	if err != nil {
 		return nil, err
 	}
-	resourceManager := resourcemanager.NewVirtualMachineResourceManager(ctx, virtClient, cdiClient, bmcClient, bmcName)
+	resourceManager := resourcemanager.NewVirtualMachineResourceManager(virtClient, cdiClient, bmcClient, bmcName)
 
 	var ipmiSimulator *ipmi.Simulator
 	if options.EnableIPMI {
@@ -106,7 +106,7 @@ func virtualMachineBMCNameFromPodLabel(ctx context.Context, bmcClient client.Cli
 func (b *VirtBMC) Run() error {
 	logrus.Info("Initializing the the VirtBMC agent...")
 
-	if err := b.resourceManager.Initialize(b.vmNamespace, b.vmName); err != nil {
+	if err := b.resourceManager.Initialize(b.context, b.vmNamespace, b.vmName); err != nil {
 		return fmt.Errorf("unable to initialize the resource manager: %v", err)
 	}
 

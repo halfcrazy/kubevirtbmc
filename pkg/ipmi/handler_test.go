@@ -8,7 +8,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/bougou/go-ipmi/pkg/hal"
-	ipmi "github.com/bougou/go-ipmi/pkg/types"
+	"github.com/bougou/go-ipmi/pkg/types"
 
 	"kubevirt.io/kubevirtbmc/pkg/resourcemanager"
 )
@@ -20,7 +20,7 @@ func TestVMChassisPowerStateDelegates(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRM := resourcemanager.NewMockResourceManager(ctrl)
-	mockRM.EXPECT().GetPowerStatus().Return(true, nil)
+	mockRM.EXPECT().GetPowerStatus(gomock.Any()).Return(true, nil)
 
 	c := vmChassis{rm: mockRM}
 	on, err := c.PowerState(context.Background())
@@ -37,8 +37,8 @@ func TestVMChassisSetPower(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRM := resourcemanager.NewMockResourceManager(ctrl)
-	mockRM.EXPECT().PowerOn().Return(nil)
-	mockRM.EXPECT().ForcePowerOff().Return(nil)
+	mockRM.EXPECT().PowerOn(gomock.Any()).Return(nil)
+	mockRM.EXPECT().ForcePowerOff(gomock.Any()).Return(nil)
 
 	c := vmChassis{rm: mockRM}
 	assert.NoError(t, c.SetPower(context.Background(), true))
@@ -54,7 +54,7 @@ func TestVMChassisPowerCycle(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRM := resourcemanager.NewMockResourceManager(ctrl)
-	mockRM.EXPECT().ForcePowerCycle().Return(nil)
+	mockRM.EXPECT().ForcePowerCycle(gomock.Any()).Return(nil)
 
 	c := vmChassis{rm: mockRM}
 	assert.NoError(t, c.PowerCycle(context.Background()))
@@ -69,7 +69,7 @@ func TestVMChassisColdResetMapsToPowerCycle(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRM := resourcemanager.NewMockResourceManager(ctrl)
-	mockRM.EXPECT().PowerCycle().Return(nil)
+	mockRM.EXPECT().PowerCycle(gomock.Any()).Return(nil)
 
 	c := vmChassis{rm: mockRM}
 	assert.NoError(t, c.ColdReset(context.Background()))
@@ -82,7 +82,7 @@ func TestVMChassisWarmResetMapsToPowerOff(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRM := resourcemanager.NewMockResourceManager(ctrl)
-	mockRM.EXPECT().PowerOff().Return(nil)
+	mockRM.EXPECT().PowerOff(gomock.Any()).Return(nil)
 
 	c := vmChassis{rm: mockRM}
 	assert.NoError(t, c.WarmReset(context.Background()))
@@ -110,8 +110,8 @@ func expectSetBootDevice(
 ) {
 	t.Helper()
 	mockRM.EXPECT().
-		SetBootDevice(device, gomock.AssignableToTypeOf(&resourcemanager.BootOptions{})).
-		DoAndReturn(func(_ resourcemanager.BootDevice, opts *resourcemanager.BootOptions) error {
+		SetBootDevice(gomock.Any(), device, gomock.AssignableToTypeOf(&resourcemanager.BootOptions{})).
+		DoAndReturn(func(_ context.Context, _ resourcemanager.BootDevice, opts *resourcemanager.BootOptions) error {
 			assert.Equal(t, mode, opts.Mode)
 			if efiBoot == nil {
 				assert.Nil(t, opts.EFIBoot)
@@ -127,7 +127,7 @@ func TestVMChassisSetBootFlags(t *testing.T) {
 
 	cases := []struct {
 		name       string
-		selector   ipmi.BootDeviceSelector
+		selector   types.BootDeviceSelector
 		persist    bool
 		efiBoot    *bool // nil means BIOSBootType=false (no explicit EFI request)
 		device     resourcemanager.BootDevice
@@ -137,27 +137,27 @@ func TestVMChassisSetBootFlags(t *testing.T) {
 	}{
 		{
 			name:       "PXE oneshot (default)",
-			selector:   ipmi.BootDeviceSelectorForcePXE,
+			selector:   types.BootDeviceSelectorForcePXE,
 			device:     resourcemanager.BootDevicePxe,
 			expectCall: true,
 		},
 		{
 			name:       "PXE persistent",
-			selector:   ipmi.BootDeviceSelectorForcePXE,
+			selector:   types.BootDeviceSelectorForcePXE,
 			persist:    true,
 			device:     resourcemanager.BootDevicePxe,
 			expectCall: true,
 		},
 		{
 			name:       "PXE oneshot EFI",
-			selector:   ipmi.BootDeviceSelectorForcePXE,
+			selector:   types.BootDeviceSelectorForcePXE,
 			efiBoot:    &efiBootTrue,
 			device:     resourcemanager.BootDevicePxe,
 			expectCall: true,
 		},
 		{
 			name:       "PXE persistent EFI",
-			selector:   ipmi.BootDeviceSelectorForcePXE,
+			selector:   types.BootDeviceSelectorForcePXE,
 			persist:    true,
 			efiBoot:    &efiBootTrue,
 			device:     resourcemanager.BootDevicePxe,
@@ -165,46 +165,46 @@ func TestVMChassisSetBootFlags(t *testing.T) {
 		},
 		{
 			name:       "HDD oneshot",
-			selector:   ipmi.BootDeviceSelectorForceHardDrive,
+			selector:   types.BootDeviceSelectorForceHardDrive,
 			device:     resourcemanager.BootDeviceHdd,
 			expectCall: true,
 		},
 		{
 			name:       "HDD safe persistent",
-			selector:   ipmi.BootDeviceSelectorForceHardDriveSafe,
+			selector:   types.BootDeviceSelectorForceHardDriveSafe,
 			persist:    true,
 			device:     resourcemanager.BootDeviceHdd,
 			expectCall: true,
 		},
 		{
 			name:       "CDROM oneshot",
-			selector:   ipmi.BootDeviceSelectorForceCDROM,
+			selector:   types.BootDeviceSelectorForceCDROM,
 			device:     resourcemanager.BootDeviceCd,
 			expectCall: true,
 		},
 		{
 			name:      "NoOverride clears overrides",
-			selector:  ipmi.BootDeviceSelectorNoOverride,
+			selector:  types.BootDeviceSelectorNoOverride,
 			clearOvrd: true,
 		},
 		{
 			name:     "BIOS setup (unsupported, no-op)",
-			selector: ipmi.BootDeviceSelectorForceBIOSSetup,
+			selector: types.BootDeviceSelectorForceBIOSSetup,
 		},
 		{
 			name:     "Diagnostic partition (unsupported, no-op)",
-			selector: ipmi.BootDeviceSelectorForceDiagnosticPartition,
+			selector: types.BootDeviceSelectorForceDiagnosticPartition,
 		},
 		{
 			name:       "PXE SetBootDevice error propagates",
-			selector:   ipmi.BootDeviceSelectorForcePXE,
+			selector:   types.BootDeviceSelectorForcePXE,
 			device:     resourcemanager.BootDevicePxe,
 			expectCall: true,
 			returnErr:  assert.AnError,
 		},
 		{
 			name:      "NoOverride ClearBootOverrides error propagates",
-			selector:  ipmi.BootDeviceSelectorNoOverride,
+			selector:  types.BootDeviceSelectorNoOverride,
 			clearOvrd: true,
 			returnErr: assert.AnError,
 		},
@@ -218,7 +218,7 @@ func TestVMChassisSetBootFlags(t *testing.T) {
 			mockRM := resourcemanager.NewMockResourceManager(ctrl)
 
 			if tc.clearOvrd {
-				mockRM.EXPECT().ClearBootOverrides().Return(tc.returnErr)
+				mockRM.EXPECT().ClearBootOverrides(gomock.Any()).Return(tc.returnErr)
 			} else if tc.expectCall {
 				expectedMode := resourcemanager.BootModeOneshot
 				if tc.persist {
@@ -229,12 +229,12 @@ func TestVMChassisSetBootFlags(t *testing.T) {
 			// Unsupported selectors: no mock calls expected.
 
 			c := vmChassis{rm: mockRM}
-			flags := &ipmi.BootOptionParam_BootFlags{
+			flags := &types.BootOptionParam_BootFlags{
 				BootDeviceSelector: tc.selector,
 				Persist:            tc.persist,
 			}
 			if tc.efiBoot != nil {
-				flags.BIOSBootType = ipmi.BIOSBootType(*tc.efiBoot)
+				flags.BIOSBootType = types.BIOSBootType(*tc.efiBoot)
 			}
 			err := c.SetBootFlags(context.Background(), flags)
 			if tc.returnErr != nil {
@@ -254,7 +254,7 @@ func TestVMChassisGetBootFlags(t *testing.T) {
 		state       *resourcemanager.BootFlagsState
 		stateErr    error
 		expectErr   bool
-		expectFlags *ipmi.BootOptionParam_BootFlags
+		expectFlags *types.BootOptionParam_BootFlags
 	}{
 		{
 			name: "PXE persistent BIOS",
@@ -264,11 +264,11 @@ func TestVMChassisGetBootFlags(t *testing.T) {
 				EFIBoot:        false,
 				OverrideActive: true,
 			},
-			expectFlags: &ipmi.BootOptionParam_BootFlags{
+			expectFlags: &types.BootOptionParam_BootFlags{
 				BootFlagsValid:     true,
 				Persist:            true,
 				BIOSBootType:       false,
-				BootDeviceSelector: ipmi.BootDeviceSelectorForcePXE,
+				BootDeviceSelector: types.BootDeviceSelectorForcePXE,
 			},
 		},
 		{
@@ -279,11 +279,11 @@ func TestVMChassisGetBootFlags(t *testing.T) {
 				EFIBoot:        true,
 				OverrideActive: true,
 			},
-			expectFlags: &ipmi.BootOptionParam_BootFlags{
+			expectFlags: &types.BootOptionParam_BootFlags{
 				BootFlagsValid:     true,
 				Persist:            false,
 				BIOSBootType:       true,
-				BootDeviceSelector: ipmi.BootDeviceSelectorForceHardDrive,
+				BootDeviceSelector: types.BootDeviceSelectorForceHardDrive,
 			},
 		},
 		{
@@ -294,11 +294,11 @@ func TestVMChassisGetBootFlags(t *testing.T) {
 				EFIBoot:        false,
 				OverrideActive: true,
 			},
-			expectFlags: &ipmi.BootOptionParam_BootFlags{
+			expectFlags: &types.BootOptionParam_BootFlags{
 				BootFlagsValid:     true,
 				Persist:            false,
 				BIOSBootType:       false,
-				BootDeviceSelector: ipmi.BootDeviceSelectorForceCDROM,
+				BootDeviceSelector: types.BootDeviceSelectorForceCDROM,
 			},
 		},
 		{
@@ -309,11 +309,11 @@ func TestVMChassisGetBootFlags(t *testing.T) {
 				EFIBoot:        false,
 				OverrideActive: false,
 			},
-			expectFlags: &ipmi.BootOptionParam_BootFlags{
+			expectFlags: &types.BootOptionParam_BootFlags{
 				BootFlagsValid:     false,
 				Persist:            true,
 				BIOSBootType:       false,
-				BootDeviceSelector: ipmi.BootDeviceSelectorNoOverride,
+				BootDeviceSelector: types.BootDeviceSelectorNoOverride,
 			},
 		},
 		{
@@ -335,7 +335,7 @@ func TestVMChassisGetBootFlags(t *testing.T) {
 			mockRM := resourcemanager.NewMockResourceManager(ctrl)
 			c := vmChassis{rm: mockRM}
 
-			mockRM.EXPECT().GetBootFlags().Return(tc.state, tc.stateErr)
+			mockRM.EXPECT().GetBootFlags(gomock.Any()).Return(tc.state, tc.stateErr)
 
 			flags, err := c.GetBootFlags(context.Background())
 			if tc.expectErr {
@@ -355,7 +355,7 @@ func TestVMChassisGetBootFlags(t *testing.T) {
 		mockRM := resourcemanager.NewMockResourceManager(ctrl)
 		c := vmChassis{rm: mockRM}
 
-		mockRM.EXPECT().GetBootFlags().Return(&resourcemanager.BootFlagsState{
+		mockRM.EXPECT().GetBootFlags(gomock.Any()).Return(&resourcemanager.BootFlagsState{
 			BootDevice:     resourcemanager.BootDevicePxe,
 			Mode:           resourcemanager.BootModeOneshot,
 			EFIBoot:        efiBootTrue,
@@ -385,7 +385,7 @@ func TestVMChassisBootInfoAckNoPersistence(t *testing.T) {
 	assert.ErrorIs(t, err, hal.ErrNotSupported)
 
 	// Set is accepted as a no-op (spec §28.14 allows a no-op HAL).
-	ack := &ipmi.BootOptionParam_BootInfoAcknowledge{ByBIOSPOST: true, BySMS: true}
+	ack := &types.BootOptionParam_BootInfoAcknowledge{ByBIOSPOST: true, BySMS: true}
 	assert.NoError(t, c.SetBootInfoAcknowledge(context.Background(), ack))
 
 	// Get after Set: still not supported (not persisted).
@@ -402,18 +402,18 @@ func TestVMChassisSetBootInfoAckNil(t *testing.T) {
 // BootDevice translation table used by SetBootFlags.
 func TestKubevirtBootDeviceMapping(t *testing.T) {
 	cases := []struct {
-		selector ipmi.BootDeviceSelector
+		selector types.BootDeviceSelector
 		device   resourcemanager.BootDevice
 		expect   bool
 	}{
-		{ipmi.BootDeviceSelectorForcePXE, resourcemanager.BootDevicePxe, true},
-		{ipmi.BootDeviceSelectorForceHardDrive, resourcemanager.BootDeviceHdd, true},
-		{ipmi.BootDeviceSelectorForceHardDriveSafe, resourcemanager.BootDeviceHdd, true},
-		{ipmi.BootDeviceSelectorForceCDROM, resourcemanager.BootDeviceCd, true},
-		{ipmi.BootDeviceSelectorNoOverride, "", false},
-		{ipmi.BootDeviceSelectorForceBIOSSetup, "", false},
-		{ipmi.BootDeviceSelectorForceDiagnosticPartition, "", false},
-		{ipmi.BootDeviceSelectorForceFloppy, "", false},
+		{types.BootDeviceSelectorForcePXE, resourcemanager.BootDevicePxe, true},
+		{types.BootDeviceSelectorForceHardDrive, resourcemanager.BootDeviceHdd, true},
+		{types.BootDeviceSelectorForceHardDriveSafe, resourcemanager.BootDeviceHdd, true},
+		{types.BootDeviceSelectorForceCDROM, resourcemanager.BootDeviceCd, true},
+		{types.BootDeviceSelectorNoOverride, "", false},
+		{types.BootDeviceSelectorForceBIOSSetup, "", false},
+		{types.BootDeviceSelectorForceDiagnosticPartition, "", false},
+		{types.BootDeviceSelectorForceFloppy, "", false},
 	}
 	for _, tc := range cases {
 		device, ok := kubevirtBootDevice(tc.selector)

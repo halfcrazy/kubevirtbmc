@@ -10,11 +10,11 @@
 package resourcemanager
 
 import (
+	context "context"
 	reflect "reflect"
 
 	gomock "go.uber.org/mock/gomock"
-
-	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
+	v1beta1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
 )
 
 // MockResourceManager is a mock of ResourceManager interface.
@@ -42,246 +42,246 @@ func (m *MockResourceManager) EXPECT() *MockResourceManagerMockRecorder {
 }
 
 // ClearBootOverrides mocks base method.
-func (m *MockResourceManager) ClearBootOverrides() error {
+func (m *MockResourceManager) ClearBootOverrides(ctx context.Context) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ClearBootOverrides")
+	ret := m.ctrl.Call(m, "ClearBootOverrides", ctx)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // ClearBootOverrides indicates an expected call of ClearBootOverrides.
-func (mr *MockResourceManagerMockRecorder) ClearBootOverrides() *gomock.Call {
+func (mr *MockResourceManagerMockRecorder) ClearBootOverrides(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClearBootOverrides", reflect.TypeOf((*MockResourceManager)(nil).ClearBootOverrides))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClearBootOverrides", reflect.TypeOf((*MockResourceManager)(nil).ClearBootOverrides), ctx)
 }
 
 // EjectMedia mocks base method.
-func (m *MockResourceManager) EjectMedia() error {
+func (m *MockResourceManager) EjectMedia(ctx context.Context) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "EjectMedia")
+	ret := m.ctrl.Call(m, "EjectMedia", ctx)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // EjectMedia indicates an expected call of EjectMedia.
-func (mr *MockResourceManagerMockRecorder) EjectMedia() *gomock.Call {
+func (mr *MockResourceManagerMockRecorder) EjectMedia(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EjectMedia", reflect.TypeOf((*MockResourceManager)(nil).EjectMedia))
-}
-
-// GetComputerSystem mocks base method.
-func (m *MockResourceManager) GetComputerSystem() (ComputerSystemInterface, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetComputerSystem")
-	ret0, _ := ret[0].(ComputerSystemInterface)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetComputerSystem indicates an expected call of GetComputerSystem.
-func (mr *MockResourceManagerMockRecorder) GetComputerSystem() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetComputerSystem", reflect.TypeOf((*MockResourceManager)(nil).GetComputerSystem))
-}
-
-// GetManager mocks base method.
-func (m *MockResourceManager) GetManager() (ManagerInterface, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetManager")
-	ret0, _ := ret[0].(ManagerInterface)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetManager indicates an expected call of GetManager.
-func (mr *MockResourceManagerMockRecorder) GetManager() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetManager", reflect.TypeOf((*MockResourceManager)(nil).GetManager))
-}
-
-// GetPowerStatus mocks base method.
-func (m *MockResourceManager) GetPowerStatus() (bool, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetPowerStatus")
-	ret0, _ := ret[0].(bool)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetPowerStatus indicates an expected call of GetPowerStatus.
-func (mr *MockResourceManagerMockRecorder) GetPowerStatus() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPowerStatus", reflect.TypeOf((*MockResourceManager)(nil).GetPowerStatus))
-}
-
-// GetVirtualMedia mocks base method.
-func (m *MockResourceManager) GetVirtualMedia() (VirtualMediaInterface, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetVirtualMedia")
-	ret0, _ := ret[0].(VirtualMediaInterface)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetVirtualMedia indicates an expected call of GetVirtualMedia.
-func (mr *MockResourceManagerMockRecorder) GetVirtualMedia() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVirtualMedia", reflect.TypeOf((*MockResourceManager)(nil).GetVirtualMedia))
-}
-
-// InsertMedia mocks base method.
-func (m *MockResourceManager) InsertMedia(arg0 string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "InsertMedia", arg0)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// InsertMedia indicates an expected call of InsertMedia.
-func (mr *MockResourceManagerMockRecorder) InsertMedia(arg0 any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertMedia", reflect.TypeOf((*MockResourceManager)(nil).InsertMedia), arg0)
-}
-
-// ForcePowerOff mocks base method.
-func (m *MockResourceManager) ForcePowerOff() error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ForcePowerOff")
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// ForcePowerOff indicates an expected call of ForcePowerOff.
-func (mr *MockResourceManagerMockRecorder) ForcePowerOff() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ForcePowerOff", reflect.TypeOf((*MockResourceManager)(nil).ForcePowerOff))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EjectMedia", reflect.TypeOf((*MockResourceManager)(nil).EjectMedia), ctx)
 }
 
 // ForcePowerCycle mocks base method.
-func (m *MockResourceManager) ForcePowerCycle() error {
+func (m *MockResourceManager) ForcePowerCycle(ctx context.Context) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ForcePowerCycle")
+	ret := m.ctrl.Call(m, "ForcePowerCycle", ctx)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // ForcePowerCycle indicates an expected call of ForcePowerCycle.
-func (mr *MockResourceManagerMockRecorder) ForcePowerCycle() *gomock.Call {
+func (mr *MockResourceManagerMockRecorder) ForcePowerCycle(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ForcePowerCycle", reflect.TypeOf((*MockResourceManager)(nil).ForcePowerCycle))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ForcePowerCycle", reflect.TypeOf((*MockResourceManager)(nil).ForcePowerCycle), ctx)
 }
 
-// PowerCycle mocks base method.
-func (m *MockResourceManager) PowerCycle() error {
+// ForcePowerOff mocks base method.
+func (m *MockResourceManager) ForcePowerOff(ctx context.Context) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PowerCycle")
+	ret := m.ctrl.Call(m, "ForcePowerOff", ctx)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// PowerCycle indicates an expected call of PowerCycle.
-func (mr *MockResourceManagerMockRecorder) PowerCycle() *gomock.Call {
+// ForcePowerOff indicates an expected call of ForcePowerOff.
+func (mr *MockResourceManagerMockRecorder) ForcePowerOff(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PowerCycle", reflect.TypeOf((*MockResourceManager)(nil).PowerCycle))
-}
-
-// PowerOff mocks base method.
-func (m *MockResourceManager) PowerOff() error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PowerOff")
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// PowerOff indicates an expected call of PowerOff.
-func (mr *MockResourceManagerMockRecorder) PowerOff() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PowerOff", reflect.TypeOf((*MockResourceManager)(nil).PowerOff))
-}
-
-// PowerOn mocks base method.
-func (m *MockResourceManager) PowerOn() error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PowerOn")
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// PowerOn indicates an expected call of PowerOn.
-func (mr *MockResourceManagerMockRecorder) PowerOn() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PowerOn", reflect.TypeOf((*MockResourceManager)(nil).PowerOn))
-}
-
-// SetBootDevice mocks base method.
-func (m *MockResourceManager) SetBootDevice(arg0 BootDevice, arg1 *BootOptions) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetBootDevice", arg0, arg1)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// SetBootDevice indicates an expected call of SetBootDevice.
-func (mr *MockResourceManagerMockRecorder) SetBootDevice(arg0, arg1 any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetBootDevice", reflect.TypeOf((*MockResourceManager)(nil).SetBootDevice), arg0, arg1)
-}
-
-// SetFirmwareMode mocks base method.
-func (m *MockResourceManager) SetFirmwareMode(arg0 FirmwareMode) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetFirmwareMode", arg0)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// SetFirmwareMode indicates an expected call of SetFirmwareMode.
-func (mr *MockResourceManagerMockRecorder) SetFirmwareMode(arg0 any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFirmwareMode", reflect.TypeOf((*MockResourceManager)(nil).SetFirmwareMode), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ForcePowerOff", reflect.TypeOf((*MockResourceManager)(nil).ForcePowerOff), ctx)
 }
 
 // GetBootFlags mocks base method.
-func (m *MockResourceManager) GetBootFlags() (*BootFlagsState, error) {
+func (m *MockResourceManager) GetBootFlags(ctx context.Context) (*BootFlagsState, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetBootFlags")
+	ret := m.ctrl.Call(m, "GetBootFlags", ctx)
 	ret0, _ := ret[0].(*BootFlagsState)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetBootFlags indicates an expected call of GetBootFlags.
-func (mr *MockResourceManagerMockRecorder) GetBootFlags() *gomock.Call {
+func (mr *MockResourceManagerMockRecorder) GetBootFlags(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBootFlags", reflect.TypeOf((*MockResourceManager)(nil).GetBootFlags))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBootFlags", reflect.TypeOf((*MockResourceManager)(nil).GetBootFlags), ctx)
 }
 
 // GetBootOverride mocks base method.
-func (m *MockResourceManager) GetBootOverride() (*bmcv1.BootOverrideStatus, error) {
+func (m *MockResourceManager) GetBootOverride(ctx context.Context) (*v1beta1.BootOverrideStatus, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetBootOverride")
-	ret0, _ := ret[0].(*bmcv1.BootOverrideStatus)
+	ret := m.ctrl.Call(m, "GetBootOverride", ctx)
+	ret0, _ := ret[0].(*v1beta1.BootOverrideStatus)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetBootOverride indicates an expected call of GetBootOverride.
-func (mr *MockResourceManagerMockRecorder) GetBootOverride() *gomock.Call {
+func (mr *MockResourceManagerMockRecorder) GetBootOverride(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBootOverride", reflect.TypeOf((*MockResourceManager)(nil).GetBootOverride))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBootOverride", reflect.TypeOf((*MockResourceManager)(nil).GetBootOverride), ctx)
+}
+
+// GetComputerSystem mocks base method.
+func (m *MockResourceManager) GetComputerSystem(ctx context.Context) (ComputerSystemInterface, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetComputerSystem", ctx)
+	ret0, _ := ret[0].(ComputerSystemInterface)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetComputerSystem indicates an expected call of GetComputerSystem.
+func (mr *MockResourceManagerMockRecorder) GetComputerSystem(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetComputerSystem", reflect.TypeOf((*MockResourceManager)(nil).GetComputerSystem), ctx)
+}
+
+// GetManager mocks base method.
+func (m *MockResourceManager) GetManager(ctx context.Context) (ManagerInterface, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetManager", ctx)
+	ret0, _ := ret[0].(ManagerInterface)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetManager indicates an expected call of GetManager.
+func (mr *MockResourceManagerMockRecorder) GetManager(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetManager", reflect.TypeOf((*MockResourceManager)(nil).GetManager), ctx)
+}
+
+// GetPowerStatus mocks base method.
+func (m *MockResourceManager) GetPowerStatus(ctx context.Context) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetPowerStatus", ctx)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetPowerStatus indicates an expected call of GetPowerStatus.
+func (mr *MockResourceManagerMockRecorder) GetPowerStatus(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPowerStatus", reflect.TypeOf((*MockResourceManager)(nil).GetPowerStatus), ctx)
 }
 
 // GetSystemUUID mocks base method.
-func (m *MockResourceManager) GetSystemUUID() (string, error) {
+func (m *MockResourceManager) GetSystemUUID(ctx context.Context) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetSystemUUID")
+	ret := m.ctrl.Call(m, "GetSystemUUID", ctx)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetSystemUUID indicates an expected call of GetSystemUUID.
-func (mr *MockResourceManagerMockRecorder) GetSystemUUID() *gomock.Call {
+func (mr *MockResourceManagerMockRecorder) GetSystemUUID(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSystemUUID", reflect.TypeOf((*MockResourceManager)(nil).GetSystemUUID))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSystemUUID", reflect.TypeOf((*MockResourceManager)(nil).GetSystemUUID), ctx)
+}
+
+// GetVirtualMedia mocks base method.
+func (m *MockResourceManager) GetVirtualMedia(ctx context.Context) (VirtualMediaInterface, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetVirtualMedia", ctx)
+	ret0, _ := ret[0].(VirtualMediaInterface)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetVirtualMedia indicates an expected call of GetVirtualMedia.
+func (mr *MockResourceManagerMockRecorder) GetVirtualMedia(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVirtualMedia", reflect.TypeOf((*MockResourceManager)(nil).GetVirtualMedia), ctx)
+}
+
+// InsertMedia mocks base method.
+func (m *MockResourceManager) InsertMedia(ctx context.Context, image string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InsertMedia", ctx, image)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// InsertMedia indicates an expected call of InsertMedia.
+func (mr *MockResourceManagerMockRecorder) InsertMedia(ctx, image any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertMedia", reflect.TypeOf((*MockResourceManager)(nil).InsertMedia), ctx, image)
+}
+
+// PowerCycle mocks base method.
+func (m *MockResourceManager) PowerCycle(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PowerCycle", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// PowerCycle indicates an expected call of PowerCycle.
+func (mr *MockResourceManagerMockRecorder) PowerCycle(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PowerCycle", reflect.TypeOf((*MockResourceManager)(nil).PowerCycle), ctx)
+}
+
+// PowerOff mocks base method.
+func (m *MockResourceManager) PowerOff(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PowerOff", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// PowerOff indicates an expected call of PowerOff.
+func (mr *MockResourceManagerMockRecorder) PowerOff(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PowerOff", reflect.TypeOf((*MockResourceManager)(nil).PowerOff), ctx)
+}
+
+// PowerOn mocks base method.
+func (m *MockResourceManager) PowerOn(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PowerOn", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// PowerOn indicates an expected call of PowerOn.
+func (mr *MockResourceManagerMockRecorder) PowerOn(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PowerOn", reflect.TypeOf((*MockResourceManager)(nil).PowerOn), ctx)
+}
+
+// SetBootDevice mocks base method.
+func (m *MockResourceManager) SetBootDevice(ctx context.Context, device BootDevice, opts *BootOptions) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetBootDevice", ctx, device, opts)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SetBootDevice indicates an expected call of SetBootDevice.
+func (mr *MockResourceManagerMockRecorder) SetBootDevice(ctx, device, opts any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetBootDevice", reflect.TypeOf((*MockResourceManager)(nil).SetBootDevice), ctx, device, opts)
+}
+
+// SetFirmwareMode mocks base method.
+func (m *MockResourceManager) SetFirmwareMode(ctx context.Context, mode FirmwareMode) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetFirmwareMode", ctx, mode)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SetFirmwareMode indicates an expected call of SetFirmwareMode.
+func (mr *MockResourceManagerMockRecorder) SetFirmwareMode(ctx, mode any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFirmwareMode", reflect.TypeOf((*MockResourceManager)(nil).SetFirmwareMode), ctx, mode)
 }

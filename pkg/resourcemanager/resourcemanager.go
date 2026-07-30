@@ -1,6 +1,10 @@
 package resourcemanager
 
-import bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
+import (
+	"context"
+
+	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
+)
 
 type BootDevice string
 
@@ -51,22 +55,22 @@ type BootFlagsState struct {
 }
 
 type ResourceManager interface {
-	GetBootFlags() (*BootFlagsState, error)
-	GetBootOverride() (*bmcv1.BootOverrideStatus, error)
-	GetComputerSystem() (ComputerSystemInterface, error)
-	GetManager() (ManagerInterface, error)
-	GetVirtualMedia() (VirtualMediaInterface, error)
+	GetBootFlags(ctx context.Context) (*BootFlagsState, error)
+	GetBootOverride(ctx context.Context) (*bmcv1.BootOverrideStatus, error)
+	GetComputerSystem(ctx context.Context) (ComputerSystemInterface, error)
+	GetManager(ctx context.Context) (ManagerInterface, error)
+	GetVirtualMedia(ctx context.Context) (VirtualMediaInterface, error)
 
-	EjectMedia() error
-	InsertMedia(string) error
-	GetPowerStatus() (bool, error)
-	PowerOn() error
-	PowerOff() error
-	ForcePowerOff() error
-	PowerCycle() error
-	ForcePowerCycle() error
-	SetBootDevice(BootDevice, *BootOptions) error
-	GetSystemUUID() (string, error)
-	SetFirmwareMode(FirmwareMode) error
-	ClearBootOverrides() error
+	EjectMedia(ctx context.Context) error
+	InsertMedia(ctx context.Context, image string) error
+	GetPowerStatus(ctx context.Context) (bool, error)
+	PowerOn(ctx context.Context) error
+	PowerOff(ctx context.Context) error
+	ForcePowerOff(ctx context.Context) error
+	PowerCycle(ctx context.Context) error
+	ForcePowerCycle(ctx context.Context) error
+	SetBootDevice(ctx context.Context, device BootDevice, opts *BootOptions) error
+	GetSystemUUID(ctx context.Context) (string, error)
+	SetFirmwareMode(ctx context.Context, mode FirmwareMode) error
+	ClearBootOverrides(ctx context.Context) error
 }

@@ -1,11 +1,14 @@
 package redfish
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
+	"kubevirt.io/kubevirtbmc/pkg/accesslog"
 	"kubevirt.io/kubevirtbmc/pkg/generated/redfish/server"
 	"kubevirt.io/kubevirtbmc/pkg/resourcemanager"
 	"kubevirt.io/kubevirtbmc/pkg/session"
@@ -127,8 +130,8 @@ func (h *handler) GetManagerCollection() *server.ManagerCollectionManagerCollect
 	}
 }
 
-func (h *handler) GetManager() (*server.ManagerV1190Manager, error) {
-	manager, err := h.rm.GetManager()
+func (h *handler) GetManager(ctx context.Context) (*server.ManagerV1190Manager, error) {
+	manager, err := h.rm.GetManager(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -157,8 +160,8 @@ func (h *handler) GetVirtualMediaCollection() *server.VirtualMediaCollectionVirt
 	}
 }
 
-func (h *handler) GetVirtualMedia() (*server.VirtualMediaV163VirtualMedia, error) {
-	virtualMedia, err := h.rm.GetVirtualMedia()
+func (h *handler) GetVirtualMedia(ctx context.Context) (*server.VirtualMediaV163VirtualMedia, error) {
+	virtualMedia, err := h.rm.GetVirtualMedia(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -171,12 +174,14 @@ func (h *handler) GetVirtualMedia() (*server.VirtualMediaV163VirtualMedia, error
 	return adapter.VirtualMedia(), nil
 }
 
-func (h *handler) VirtualMediaEject() error {
-	return h.rm.EjectMedia()
+func (h *handler) VirtualMediaEject(ctx context.Context) error {
+	accesslog.Record(ctx, logrus.Fields{"action": "eject_media"})
+	return h.rm.EjectMedia(ctx)
 }
 
-func (h *handler) VirtualMediaInsert(image string) error {
-	return h.rm.InsertMedia(image)
+func (h *handler) VirtualMediaInsert(ctx context.Context, image string) error {
+	accesslog.Record(ctx, logrus.Fields{"action": "insert_media", "image": image})
+	return h.rm.InsertMedia(ctx, image)
 }
 
 func (h *handler) GetComputerSystemCollection() *server.ComputerSystemCollectionComputerSystemCollection {
@@ -194,8 +199,8 @@ func (h *handler) GetComputerSystemCollection() *server.ComputerSystemCollection
 	}
 }
 
-func (h *handler) GetComputerSystem() (*server.ComputerSystemV1220ComputerSystem, error) {
-	computerSystem, err := h.rm.GetComputerSystem()
+func (h *handler) GetComputerSystem(ctx context.Context) (*server.ComputerSystemV1220ComputerSystem, error) {
+	computerSystem, err := h.rm.GetComputerSystem(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +214,7 @@ func (h *handler) GetComputerSystem() (*server.ComputerSystemV1220ComputerSystem
 
 	// GetBootFlags (VM spec + status.bootOverride) is authoritative; the
 	// in-memory ComputerSystem model is lost on pod restart.
-	if flags, err := h.rm.GetBootFlags(); err == nil && flags != nil {
+	if flags, err := h.rm.GetBootFlags(ctx); err == nil && flags != nil {
 		cs.Boot.BootSourceOverrideTarget = resourcemanager.BootDeviceToRedfishTarget(flags.BootDevice)
 		cs.Boot.BootSourceOverrideMode = resourcemanager.EFIBootToRedfishMode(flags.EFIBoot)
 		if flags.OverrideActive {
@@ -226,19 +231,26 @@ func (h *handler) GetComputerSystem() (*server.ComputerSystemV1220ComputerSystem
 	return cs, nil
 }
 
-func (h *handler) PatchComputerSystem(computerSystemPatch *server.ComputerSystemV1220ComputerSystem) error {
+func (h *handler) PatchComputerSystem(ctx context.Context, computerSystemPatch *server.ComputerSystemV1220ComputerSystem) error {
 	boot := computerSystemPatch.Boot
+	accesslog.Record(ctx, logrus.Fields{
+		"action":       "patch_boot",
+		"boot_target":  string(boot.BootSourceOverrideTarget),
+		"boot_enabled": string(boot.BootSourceOverrideEnabled),
+		"boot_mode":    string(boot.BootSourceOverrideMode),
+	})
+
 	firmwareMode, hasFirmwareMode := redfishFirmwareMode(boot.BootSourceOverrideMode)
 
 	var bootMode resourcemanager.BootMode
 	hasBootOverride := true
 	switch boot.BootSourceOverrideEnabled {
 	case server.COMPUTERSYSTEMV1220BOOTSOURCEOVERRIDEENABLED_DISABLED:
-		if err := h.rm.ClearBootOverrides(); err != nil {
+		if err := h.rm.ClearBootOverrides(ctx); err != nil {
 			return err
 		}
 		if hasFirmwareMode {
-			return h.rm.SetFirmwareMode(firmwareMode)
+			return h.rm.SetFirmwareMode(ctx, firmwareMode)
 		}
 		return nil
 	case server.COMPUTERSYSTEMV1220BOOTSOURCEOVERRIDEENABLED_ONCE:
@@ -250,7 +262,7 @@ func (h *handler) PatchComputerSystem(computerSystemPatch *server.ComputerSystem
 		// unchanged, so the target applies under the current override mode.
 		// (ironic sends target-only PATCHes when the desired enabled state
 		// already matches the reported one.)
-		override, err := h.rm.GetBootOverride()
+		override, err := h.rm.GetBootOverride(ctx)
 		if err != nil {
 			return err
 		}
@@ -267,7 +279,7 @@ func (h *handler) PatchComputerSystem(computerSystemPatch *server.ComputerSystem
 
 	if !hasBootOverride {
 		if hasFirmwareMode {
-			return h.rm.SetFirmwareMode(firmwareMode)
+			return h.rm.SetFirmwareMode(ctx, firmwareMode)
 		}
 		return nil
 	}
@@ -289,7 +301,7 @@ func (h *handler) PatchComputerSystem(computerSystemPatch *server.ComputerSystem
 		efiBoot := firmwareMode == resourcemanager.FirmwareModeUEFI
 		opts.EFIBoot = &efiBoot
 	}
-	if err := h.rm.SetBootDevice(bootDevice, opts); err != nil {
+	if err := h.rm.SetBootDevice(ctx, bootDevice, opts); err != nil {
 		return err
 	}
 	return nil
@@ -306,8 +318,10 @@ func redfishFirmwareMode(mode server.ComputerSystemV1220BootSourceOverrideMode) 
 	}
 }
 
-func (h *handler) ComputerSystemReset(resetType server.ResourceResetType) error {
-	powerActionMap := map[server.ResourceResetType]func() error{
+func (h *handler) ComputerSystemReset(ctx context.Context, resetType server.ResourceResetType) error {
+	accesslog.Record(ctx, logrus.Fields{"action": "reset", "reset_type": string(resetType)})
+
+	powerActionMap := map[server.ResourceResetType]func(context.Context) error{
 		server.RESOURCERESETTYPE_ON:                h.rm.PowerOn,
 		server.RESOURCERESETTYPE_GRACEFUL_SHUTDOWN: h.rm.PowerOff,
 		server.RESOURCERESETTYPE_FORCE_OFF:         h.rm.ForcePowerOff,
@@ -319,16 +333,16 @@ func (h *handler) ComputerSystemReset(resetType server.ResourceResetType) error 
 	if !ok {
 		return fmt.Errorf("unsupported reset type: %s", resetType)
 	}
-	return powerAction()
+	return powerAction(ctx)
 }
 
 // ComputerSystemSetDefaultBootOrder sets the boot order for the computer system back to default.
 // TODO: Implement real default boot order setting. Right now we intentionally misuse the handler to set the first boot
 // device.
-func (h *handler) ComputerSystemSetDefaultBootOrder(bootDevices []string) error {
+func (h *handler) ComputerSystemSetDefaultBootOrder(ctx context.Context, bootDevices []string) error {
 	var bootDevice resourcemanager.BootDevice
 	if len(bootDevices) > 0 {
 		bootDevice = resourcemanager.BootDevice(bootDevices[0])
 	}
-	return h.rm.SetBootDevice(bootDevice, &resourcemanager.BootOptions{Mode: resourcemanager.BootModePersistent})
+	return h.rm.SetBootDevice(ctx, bootDevice, &resourcemanager.BootOptions{Mode: resourcemanager.BootModePersistent})
 }

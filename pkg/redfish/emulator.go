@@ -26,8 +26,16 @@ type Emulator struct {
 
 func NewEmulator(ctx context.Context, port int, bmcUser string, bmcPassword string, resourceManager resourcemanager.ResourceManager) *Emulator {
 	apiService := NewAPIService(bmcUser, bmcPassword, resourceManager)
-	apiController := server.NewDefaultAPIController(apiService)
+	apiController := server.NewDefaultAPIController(apiService, server.WithDefaultAPIErrorHandler(recordingErrorHandler))
 	router := server.NewRouter(session.AuthMiddleware(bmcUser, bmcPassword), routeFilter{apiController})
+
+	// Mount /healthz outside the access-log wrapper so readiness probes stay silent.
+	root := http.NewServeMux()
+	root.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	root.Handle("/", accessLog(router))
 
 	return &Emulator{
 		ctx:         ctx,
@@ -36,7 +44,7 @@ func NewEmulator(ctx context.Context, port int, bmcUser string, bmcPassword stri
 		bmcPassword: bmcPassword,
 		server: &http.Server{
 			Addr:    fmt.Sprintf(":%d", port),
-			Handler: router,
+			Handler: root,
 		},
 	}
 }

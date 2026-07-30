@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/sirupsen/logrus"
+	logrustest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -21,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
+	"kubevirt.io/kubevirtbmc/pkg/accesslog"
 	"kubevirt.io/kubevirtbmc/pkg/builder"
 	"kubevirt.io/kubevirtbmc/pkg/util"
 )
@@ -246,7 +249,6 @@ func TestVirtualMachineResourceManager_EjectMedia(t *testing.T) {
 			}
 
 			vmrm := &VirtualMachineResourceManager{
-				ctx:          context.TODO(),
 				virtClient:   fakeVirtClient,
 				cdiClient:    fakeCdiClient,
 				namespace:    testNamespace,
@@ -254,7 +256,7 @@ func TestVirtualMachineResourceManager_EjectMedia(t *testing.T) {
 				virtualMedia: tc.virtualMedia,
 			}
 
-			err := vmrm.EjectMedia()
+			err := vmrm.EjectMedia(context.Background())
 			if tc.shouldError {
 				require.Error(t, err)
 			} else {
@@ -481,7 +483,6 @@ func TestVirtualMachineResourceManager_InsertMedia(t *testing.T) {
 			}
 
 			vmrm := &VirtualMachineResourceManager{
-				ctx:          context.TODO(),
 				virtClient:   fakeVirtClient,
 				cdiClient:    fakeCdiClient,
 				namespace:    testNamespace,
@@ -494,7 +495,7 @@ func TestVirtualMachineResourceManager_InsertMedia(t *testing.T) {
 				vmrm.bmcName = tc.bmc.Name
 			}
 
-			err := vmrm.InsertMedia(tc.imageURL)
+			err := vmrm.InsertMedia(context.Background(), tc.imageURL)
 			if tc.shouldError {
 				require.Error(t, err)
 			} else {
@@ -550,13 +551,12 @@ func TestVirtualMachineResourceManager_GetPowerStatus(t *testing.T) {
 			fakeVirtClient := kubevirtfake.NewSimpleClientset(tc.vm)
 
 			vmrm := &VirtualMachineResourceManager{
-				ctx:        context.TODO(),
 				virtClient: fakeVirtClient,
 				namespace:  testNamespace,
 				name:       testVMName,
 			}
 
-			status, err := vmrm.GetPowerStatus()
+			status, err := vmrm.GetPowerStatus(context.Background())
 			if tc.shouldError {
 				require.Error(t, err)
 				return
@@ -728,13 +728,12 @@ func TestVirtualMachineResourceManager_PowerOn(t *testing.T) {
 			}
 
 			vmrm := &VirtualMachineResourceManager{
-				ctx:        context.TODO(),
 				virtClient: fakeVirtClient,
 				namespace:  testNamespace,
 				name:       testVMName,
 			}
 
-			err := vmrm.PowerOn()
+			err := vmrm.PowerOn(context.Background())
 			if tc.wantErr {
 				require.Error(t, err)
 				var retryable *ErrRetryable
@@ -842,13 +841,12 @@ func TestVirtualMachineResourceManager_PowerOff(t *testing.T) {
 			}
 
 			vmrm := &VirtualMachineResourceManager{
-				ctx:        context.TODO(),
 				virtClient: fakeVirtClient,
 				namespace:  testNamespace,
 				name:       testVMName,
 			}
 
-			err := vmrm.PowerOff()
+			err := vmrm.PowerOff(context.Background())
 			if tc.wantErr {
 				require.Error(t, err)
 				var retryable *ErrRetryable
@@ -944,13 +942,12 @@ func TestVirtualMachineResourceManager_ForcePowerOff(t *testing.T) {
 			}
 
 			vmrm := &VirtualMachineResourceManager{
-				ctx:        context.TODO(),
 				virtClient: fakeVirtClient,
 				namespace:  testNamespace,
 				name:       testVMName,
 			}
 
-			err := vmrm.ForcePowerOff()
+			err := vmrm.ForcePowerOff(context.Background())
 			if tc.wantErr {
 				require.Error(t, err)
 				var retryable *ErrRetryable
@@ -993,6 +990,9 @@ func injectGetError(t *testing.T, c *kubevirtfake.Clientset, resource string) {
 }
 
 func TestVirtualMachineResourceManager_PowerCycle(t *testing.T) {
+	hook := logrustest.NewGlobal()
+	defer hook.Reset()
+
 	testCases := []struct {
 		name                string
 		vm                  *kubevirtv1.VirtualMachine
@@ -1001,6 +1001,9 @@ func TestVirtualMachineResourceManager_PowerCycle(t *testing.T) {
 		wantErr             bool
 		wantRetryable       bool
 		expectedSubresource string
+		// wantPath is the power_cycle field recorded on the access-log line;
+		// empty when the plain restart path needs no explanation.
+		wantPath string
 	}{
 		{
 			name:                "Power cycle a running virtual machine should trigger VM restart",
@@ -1019,12 +1022,14 @@ func TestVirtualMachineResourceManager_PowerCycle(t *testing.T) {
 				Build(),
 			vmi:                 builder.NewVirtualMachineInstanceBuilder(testNamespace, testVMName).Build(),
 			expectedSubresource: "restart",
+			wantPath:            "restart",
 		},
 		{
 			name:                "Power cycle a halted virtual machine should trigger VM start",
 			vm:                  builder.NewVirtualMachineBuilder(testNamespace, testVMName).Build(),
 			vmi:                 nil,
 			expectedSubresource: "start",
+			wantPath:            "power_on",
 		},
 		{
 			name: "Restart fails with Stop+Start queued → nil (idempotent restart underway)",
@@ -1074,11 +1079,13 @@ func TestVirtualMachineResourceManager_PowerCycle(t *testing.T) {
 			vmi:                 nil,
 			restartErr:          "VM is not running",
 			expectedSubresource: "start",
+			wantPath:            "power_on",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			hook.Reset()
 			fakeVirtClient := kubevirtfake.NewSimpleClientset(tc.vm)
 			if tc.vmi != nil {
 				err := fakeVirtClient.Tracker().Add(tc.vmi)
@@ -1089,13 +1096,13 @@ func TestVirtualMachineResourceManager_PowerCycle(t *testing.T) {
 			}
 
 			vmrm := &VirtualMachineResourceManager{
-				ctx:        context.TODO(),
 				virtClient: fakeVirtClient,
 				namespace:  testNamespace,
 				name:       testVMName,
 			}
 
-			err := vmrm.PowerCycle()
+			ctx := accesslog.Start(context.Background(), "test")
+			err := vmrm.PowerCycle(ctx)
 			if tc.wantErr {
 				require.Error(t, err)
 				var retryable *ErrRetryable
@@ -1104,6 +1111,10 @@ func TestVirtualMachineResourceManager_PowerCycle(t *testing.T) {
 				require.NoError(t, err)
 			}
 			requirePutSubresourceAction(t, fakeVirtClient.Actions(), tc.expectedSubresource)
+
+			accesslog.Emit(ctx, logrus.InfoLevel, "test", nil, nil)
+			gotPath, _ := hook.LastEntry().Data["power_cycle"].(string)
+			require.Equal(t, tc.wantPath, gotPath)
 		})
 	}
 }
@@ -1146,13 +1157,12 @@ func TestVirtualMachineResourceManager_ForcePowerCycle(t *testing.T) {
 			}
 
 			vmrm := &VirtualMachineResourceManager{
-				ctx:        context.TODO(),
 				virtClient: fakeVirtClient,
 				namespace:  testNamespace,
 				name:       testVMName,
 			}
 
-			err := vmrm.ForcePowerCycle()
+			err := vmrm.ForcePowerCycle(context.Background())
 			require.NoError(t, err)
 
 			powerAction := requirePutSubresourceAction(t, fakeVirtClient.Actions(), tc.expectedSubresource)
@@ -1444,7 +1454,6 @@ func TestVirtualMachineResourceManager_SetBootDevice(t *testing.T) {
 			fakeBMCClient := newTestBMCClient(newTestBMC())
 
 			vmrm := &VirtualMachineResourceManager{
-				ctx:        context.TODO(),
 				virtClient: fakeVirtClient,
 				bmcClient:  fakeBMCClient,
 				namespace:  testNamespace,
@@ -1452,7 +1461,7 @@ func TestVirtualMachineResourceManager_SetBootDevice(t *testing.T) {
 				bmcName:    testBMCName,
 			}
 
-			err := vmrm.SetBootDevice(tc.bootDevice, &BootOptions{Mode: BootModePersistent})
+			err := vmrm.SetBootDevice(context.Background(), tc.bootDevice, &BootOptions{Mode: BootModePersistent})
 			if tc.shouldError {
 				require.Error(t, err)
 				return
@@ -1470,7 +1479,6 @@ func TestVirtualMachineResourceManager_SetBootDevice(t *testing.T) {
 func TestVirtualMachineResourceManager_BootOverrideStatus(t *testing.T) {
 	fakeBMCClient := newTestBMCClient(newTestBMC())
 	vmrm := &VirtualMachineResourceManager{
-		ctx:       context.TODO(),
 		bmcClient: fakeBMCClient,
 		namespace: testNamespace,
 		bmcName:   testBMCName,
@@ -1481,16 +1489,16 @@ func TestVirtualMachineResourceManager_BootOverrideStatus(t *testing.T) {
 		VMIUID:     "test-uid",
 		BootOrders: map[string]uint{"disk:root": 1, "interface:default": 0},
 	}
-	require.NoError(t, vmrm.saveBootOverride(override))
+	require.NoError(t, vmrm.saveBootOverride(context.Background(), override))
 
-	saved, err := vmrm.GetBootOverride()
+	saved, err := vmrm.GetBootOverride(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, override.Mode, saved.Mode)
 	require.Equal(t, override.VMIUID, saved.VMIUID)
 	require.Equal(t, override.BootOrders, saved.BootOrders)
 
-	require.NoError(t, vmrm.clearBootOverride())
-	saved, err = vmrm.GetBootOverride()
+	require.NoError(t, vmrm.clearBootOverride(context.Background()))
+	saved, err = vmrm.GetBootOverride(context.Background())
 	require.NoError(t, err)
 	require.Nil(t, saved)
 }
@@ -1505,7 +1513,6 @@ func TestVirtualMachineResourceManager_SetBootDevicePersistentSavesOverrideMarke
 	fakeBMCClient := newTestBMCClient(newTestBMC())
 
 	vmrm := &VirtualMachineResourceManager{
-		ctx:        context.TODO(),
 		virtClient: fakeVirtClient,
 		bmcClient:  fakeBMCClient,
 		namespace:  testNamespace,
@@ -1513,19 +1520,19 @@ func TestVirtualMachineResourceManager_SetBootDevicePersistentSavesOverrideMarke
 		bmcName:    testBMCName,
 	}
 
-	require.NoError(t, vmrm.saveBootOverride(&bmcv1.BootOverrideStatus{
+	require.NoError(t, vmrm.saveBootOverride(context.Background(), &bmcv1.BootOverrideStatus{
 		Mode:       bmcv1.BootOverrideModeOneshot,
 		BootOrders: map[string]uint{"disk:disk": 1},
 	}))
-	saved, err := vmrm.GetBootOverride()
+	saved, err := vmrm.GetBootOverride(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, saved)
 
-	err = vmrm.SetBootDevice(BootDevicePxe, &BootOptions{Mode: BootModePersistent})
+	err = vmrm.SetBootDevice(context.Background(), BootDevicePxe, &BootOptions{Mode: BootModePersistent})
 	require.NoError(t, err)
 
 	// Persistent override overwrites the oneshot backup with a marker.
-	saved, err = vmrm.GetBootOverride()
+	saved, err = vmrm.GetBootOverride(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, saved)
 	require.Equal(t, bmcv1.BootOverrideModePersistent, saved.Mode)
@@ -1542,7 +1549,6 @@ func TestVirtualMachineResourceManager_OneshotOverwritesPersistentMarker(t *test
 	fakeBMCClient := newTestBMCClient(newTestBMC())
 
 	vmrm := &VirtualMachineResourceManager{
-		ctx:        context.TODO(),
 		virtClient: fakeVirtClient,
 		bmcClient:  fakeBMCClient,
 		namespace:  testNamespace,
@@ -1550,18 +1556,18 @@ func TestVirtualMachineResourceManager_OneshotOverwritesPersistentMarker(t *test
 		bmcName:    testBMCName,
 	}
 
-	require.NoError(t, vmrm.saveBootOverride(&bmcv1.BootOverrideStatus{
+	require.NoError(t, vmrm.saveBootOverride(context.Background(), &bmcv1.BootOverrideStatus{
 		Mode: bmcv1.BootOverrideModePersistent,
 	}))
-	saved, err := vmrm.GetBootOverride()
+	saved, err := vmrm.GetBootOverride(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, bmcv1.BootOverrideModePersistent, saved.Mode)
 
 	// A oneshot overwrites the persistent marker with a fresh backup.
-	err = vmrm.SetBootDevice(BootDevicePxe, &BootOptions{Mode: BootModeOneshot})
+	err = vmrm.SetBootDevice(context.Background(), BootDevicePxe, &BootOptions{Mode: BootModeOneshot})
 	require.NoError(t, err)
 
-	saved, err = vmrm.GetBootOverride()
+	saved, err = vmrm.GetBootOverride(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, saved)
 	require.Equal(t, bmcv1.BootOverrideModeOneshot, saved.Mode)
@@ -1580,7 +1586,6 @@ func TestVirtualMachineResourceManager_SetBootDeviceAllowsFirmwareTemplateChange
 	fakeBMCClient := newTestBMCClient(newTestBMC())
 
 	vmrm := &VirtualMachineResourceManager{
-		ctx:        context.TODO(),
 		virtClient: fakeVirtClient,
 		bmcClient:  fakeBMCClient,
 		namespace:  testNamespace,
@@ -1588,10 +1593,10 @@ func TestVirtualMachineResourceManager_SetBootDeviceAllowsFirmwareTemplateChange
 		bmcName:    testBMCName,
 	}
 
-	err := vmrm.SetBootDevice(BootDevicePxe, &BootOptions{Mode: BootModeOneshot, EFIBoot: util.Ptr(true)})
+	err := vmrm.SetBootDevice(context.Background(), BootDevicePxe, &BootOptions{Mode: BootModeOneshot, EFIBoot: util.Ptr(true)})
 	require.NoError(t, err)
 
-	saved, err := vmrm.GetBootOverride()
+	saved, err := vmrm.GetBootOverride(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, saved)
 	require.Empty(t, saved.VMIUID, "VMIUID should be empty because no VMI exists in the test") // VM was not running
@@ -1625,7 +1630,6 @@ func TestVirtualMachineResourceManager_DoubleOneshotPreservesOriginalBackup(t *t
 	fakeBMCClient := newTestBMCClient(newTestBMC())
 
 	vmrm := &VirtualMachineResourceManager{
-		ctx:        context.TODO(),
 		virtClient: fakeVirtClient,
 		bmcClient:  fakeBMCClient,
 		namespace:  testNamespace,
@@ -1633,10 +1637,10 @@ func TestVirtualMachineResourceManager_DoubleOneshotPreservesOriginalBackup(t *t
 		bmcName:    testBMCName,
 	}
 
-	err := vmrm.SetBootDevice(BootDevicePxe, &BootOptions{Mode: BootModeOneshot})
+	err := vmrm.SetBootDevice(context.Background(), BootDevicePxe, &BootOptions{Mode: BootModeOneshot})
 	require.NoError(t, err)
 
-	backup, err := vmrm.GetBootOverride()
+	backup, err := vmrm.GetBootOverride(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, backup)
 	require.Equal(t, uint(1), backup.BootOrders["disk:disk"])
@@ -1652,11 +1656,11 @@ func TestVirtualMachineResourceManager_DoubleOneshotPreservesOriginalBackup(t *t
 	require.Equal(t, util.Ptr[uint](3), disks[1].BootOrder)  // cdrom
 	require.Equal(t, util.Ptr[uint](1), ifaces[0].BootOrder) // iface (PXE first)
 
-	err = vmrm.SetBootDevice(BootDeviceCd, &BootOptions{Mode: BootModeOneshot})
+	err = vmrm.SetBootDevice(context.Background(), BootDeviceCd, &BootOptions{Mode: BootModeOneshot})
 	require.NoError(t, err)
 
 	// The backup must still hold the original order, not the PXE state.
-	backup, err = vmrm.GetBootOverride()
+	backup, err = vmrm.GetBootOverride(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, backup)
 	require.Equal(t, uint(1), backup.BootOrders["disk:disk"],
@@ -1689,7 +1693,6 @@ func TestVirtualMachineResourceManager_DoubleOneshotRestoresLateFirmwareChange(t
 	fakeBMCClient := newTestBMCClient(newTestBMC())
 
 	vmrm := &VirtualMachineResourceManager{
-		ctx:        context.TODO(),
 		virtClient: fakeVirtClient,
 		bmcClient:  fakeBMCClient,
 		namespace:  testNamespace,
@@ -1697,20 +1700,20 @@ func TestVirtualMachineResourceManager_DoubleOneshotRestoresLateFirmwareChange(t
 		bmcName:    testBMCName,
 	}
 
-	require.NoError(t, vmrm.SetBootDevice(BootDevicePxe, &BootOptions{Mode: BootModeOneshot}))
-	backup, err := vmrm.GetBootOverride()
+	require.NoError(t, vmrm.SetBootDevice(context.Background(), BootDevicePxe, &BootOptions{Mode: BootModeOneshot}))
+	backup, err := vmrm.GetBootOverride(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, bmcv1.FirmwareTypeLegacy, backup.OriginalFirmware,
 		"firmware must be recorded even when the first oneshot does not change it")
 
-	require.NoError(t, vmrm.SetBootDevice(BootDeviceCd, &BootOptions{Mode: BootModeOneshot, EFIBoot: util.Ptr(true)}))
+	require.NoError(t, vmrm.SetBootDevice(context.Background(), BootDeviceCd, &BootOptions{Mode: BootModeOneshot, EFIBoot: util.Ptr(true)}))
 
 	updatedVM, err := fakeVirtClient.KubevirtV1().VirtualMachines(testNamespace).
 		Get(context.TODO(), testVMName, metav1.GetOptions{})
 	require.NoError(t, err)
 	require.NotNil(t, updatedVM.Spec.Template.Spec.Domain.Firmware)
 
-	backup, err = vmrm.GetBootOverride()
+	backup, err = vmrm.GetBootOverride(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, bmcv1.FirmwareTypeLegacy, backup.OriginalFirmware,
 		"original BIOS firmware must survive the second oneshot")
@@ -1743,13 +1746,12 @@ func TestVirtualMachineResourceManager_SetFirmwareMode(t *testing.T) {
 	fakeVirtClient := kubevirtfake.NewSimpleClientset(vm)
 
 	vmrm := &VirtualMachineResourceManager{
-		ctx:        context.TODO(),
 		virtClient: fakeVirtClient,
 		namespace:  testNamespace,
 		name:       testVMName,
 	}
 
-	err := vmrm.SetFirmwareMode(FirmwareModeUEFI)
+	err := vmrm.SetFirmwareMode(context.Background(), FirmwareModeUEFI)
 	require.NoError(t, err)
 
 	updatedVM, err := fakeVirtClient.KubevirtV1().VirtualMachines(testNamespace).
@@ -1761,7 +1763,7 @@ func TestVirtualMachineResourceManager_SetFirmwareMode(t *testing.T) {
 	require.NotNil(t, updatedVM.Spec.Template.Spec.Domain.Firmware.Bootloader.EFI.SecureBoot)
 	require.False(t, *updatedVM.Spec.Template.Spec.Domain.Firmware.Bootloader.EFI.SecureBoot)
 
-	err = vmrm.SetFirmwareMode(FirmwareModeLegacy)
+	err = vmrm.SetFirmwareMode(context.Background(), FirmwareModeLegacy)
 	require.NoError(t, err)
 
 	updatedVM, err = fakeVirtClient.KubevirtV1().VirtualMachines(testNamespace).
@@ -1952,7 +1954,6 @@ func TestVirtualMachineResourceManager_ClearBootOverrides_WithBackup(t *testing.
 	fakeVirtClient := kubevirtfake.NewSimpleClientset(vm)
 
 	vmrm := &VirtualMachineResourceManager{
-		ctx:        context.TODO(),
 		virtClient: fakeVirtClient,
 		bmcClient:  fakeBMCClient,
 		namespace:  testNamespace,
@@ -1960,7 +1961,7 @@ func TestVirtualMachineResourceManager_ClearBootOverrides_WithBackup(t *testing.
 		bmcName:    testBMCName,
 	}
 
-	err := vmrm.ClearBootOverrides()
+	err := vmrm.ClearBootOverrides(context.Background())
 	require.NoError(t, err)
 
 	updatedVM, err := fakeVirtClient.KubevirtV1().VirtualMachines(testNamespace).
