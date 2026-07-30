@@ -23,6 +23,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -454,18 +455,6 @@ func specIPMIEnabled(spec *bmcv1.VirtualMachineBMCSpec) bool {
 	return spec.IPMI != nil && spec.IPMI.Enabled != nil && *spec.IPMI.Enabled
 }
 
-func podIPMIEnabled(pod *corev1.Pod) bool {
-	val, ok := pod.Annotations[EnableIPMIAnnotation]
-	if !ok {
-		return false
-	}
-	enabled, err := strconv.ParseBool(val)
-	if err != nil {
-		return false
-	}
-	return enabled
-}
-
 func (r *VirtualMachineBMCReconciler) patchVirtBMCServicePorts(
 	ctx context.Context,
 	virtualMachineBMC *bmcv1.VirtualMachineBMC,
@@ -486,6 +475,10 @@ func (r *VirtualMachineBMCReconciler) patchVirtBMCServicePorts(
 
 	desired := r.constructServiceFromVirtualMachineBMC(virtualMachineBMC)
 
+	if apiequality.Semantic.DeepEqual(existing.Spec.Ports, desired.Spec.Ports) {
+		return nil
+	}
+
 	patch := client.MergeFrom(existing.DeepCopy())
 	existing.Spec.Ports = desired.Spec.Ports
 
@@ -499,11 +492,13 @@ func (r *VirtualMachineBMCReconciler) patchVirtBMCServicePorts(
 	return nil
 }
 
-// reconcileIPMIChange detects a mismatch between the spec's enableIPMI flag and
-// the stamped annotation on the existing pod. When a mismatch is found it
-// deletes the stale pod (ports are immutable) and patches the Service in-place
-// (preserving ClusterIP), then requeues so the main loop recreates the pod.
-func (r *VirtualMachineBMCReconciler) reconcileIPMIChange(ctx context.Context, virtualMachineBMC *bmcv1.VirtualMachineBMC) (requeue bool, err error) {
+// reconcilePodTemplateChange replaces an existing pod when its stamped template
+// hash differs from the current desired template.
+func (r *VirtualMachineBMCReconciler) reconcilePodTemplateChange(
+	ctx context.Context,
+	virtualMachineBMC *bmcv1.VirtualMachineBMC,
+	desiredPod *corev1.Pod,
+) (requeue bool, err error) {
 	log := log.FromContext(ctx)
 
 	pod, err := r.getVirtBMCPod(ctx, virtualMachineBMC)
@@ -515,22 +510,17 @@ func (r *VirtualMachineBMCReconciler) reconcileIPMIChange(ctx context.Context, v
 		return false, nil
 	}
 
-	currentHasIPMI := podIPMIEnabled(pod)
-	desiredHasIPMI := specIPMIEnabled(&virtualMachineBMC.Spec)
-
-	if currentHasIPMI == desiredHasIPMI {
+	currentHash := pod.Annotations[PodTemplateHashAnnotation]
+	desiredHash := desiredPod.Annotations[PodTemplateHashAnnotation]
+	if currentHash == desiredHash {
 		return false, nil
 	}
 
-	log.Info("enableIPMI changed, replacing pod and patching service",
-		"currentHasIPMI", currentHasIPMI,
-		"desiredHasIPMI", desiredHasIPMI)
+	log.Info("virtBMC Pod template changed, replacing pod",
+		"currentHash", currentHash,
+		"desiredHash", desiredHash)
 
 	if err := r.deleteVirtBMCPod(ctx, virtualMachineBMC); err != nil {
-		return false, err
-	}
-
-	if err := r.patchVirtBMCServicePorts(ctx, virtualMachineBMC); err != nil {
 		return false, err
 	}
 
@@ -593,7 +583,15 @@ func (r *VirtualMachineBMCReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, nil
 	}
 
-	deleted, err := r.reconcileIPMIChange(ctx, &virtualMachineBMC)
+	pod := r.constructPodFromVirtualMachineBMC(&virtualMachineBMC)
+	if err := ctrl.SetControllerReference(&virtualMachineBMC, pod, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := stampPodTemplateHash(pod); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to hash virtBMC Pod template: %w", err)
+	}
+
+	deleted, err := r.reconcilePodTemplateChange(ctx, &virtualMachineBMC, pod)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -602,12 +600,6 @@ func (r *VirtualMachineBMCReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	if err := r.ensureRBACResources(ctx, &virtualMachineBMC); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Prepare the virtBMC Pod
-	pod := r.constructPodFromVirtualMachineBMC(&virtualMachineBMC)
-	if err := ctrl.SetControllerReference(&virtualMachineBMC, pod, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -628,6 +620,14 @@ func (r *VirtualMachineBMCReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Create the virtBMC Service on the cluster
 	if err := r.Create(ctx, svc); err != nil && !apierrors.IsAlreadyExists(err) {
 		log.Error(err, "unable to create Service for VirtualMachineBMC", "svc", svc)
+		return ctrl.Result{}, err
+	}
+
+	// Ensure the Service ports converge to the desired spec (e.g. after an
+	// IPMI toggle), preserving ClusterIP. This runs unconditionally because
+	// the pod-replacement path is not always reached — the agent pod may be
+	// absent at the moment of the toggle.
+	if err := r.patchVirtBMCServicePorts(ctx, &virtualMachineBMC); err != nil {
 		return ctrl.Result{}, err
 	}
 

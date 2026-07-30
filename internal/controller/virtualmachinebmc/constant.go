@@ -17,4 +17,5 @@ const (
 	VMNameLabel                = "kubevirt.io/vm-name"
 	VirtualMachineBMCNamespace = "kubevirtbmc-system"
 	EnableIPMIAnnotation       = "bmc.kubevirt.io/enable-ipmi"
+	PodTemplateHashAnnotation  = "bmc.kubevirt.io/pod-template-hash"
 )
