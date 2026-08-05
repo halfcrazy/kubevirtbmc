@@ -28,6 +28,43 @@ const (
 	ConditionSecretAvailable         = "SecretAvailable"
 )
 
+// TransitionalStateStrategy defines how virtbmc handles transient VM lifecycle
+// states where KubeVirt power operations may fail temporarily.
+// +kubebuilder:validation:Enum=RetrySignal;ServerWait
+type TransitionalStateStrategy string
+
+const (
+	// TransitionalStateStrategyRetrySignal returns protocol-specific retry
+	// signals (IPMI Node Busy / Redfish iLO InvalidOperationForSystemState)
+	// so the client can retry. Suitable for Metal3/Ironic.
+	TransitionalStateStrategyRetrySignal TransitionalStateStrategy = "RetrySignal"
+	// TransitionalStateStrategyServerWait blocks until the operation converges
+	// or times out. Suitable for Tinkerbell/Foreman clients that do not retry
+	// busy signals.
+	TransitionalStateStrategyServerWait TransitionalStateStrategy = "ServerWait"
+)
+
+// TransitionalStateSpec configures transitional VM state handling for power
+// operations issued through IPMI/Redfish.
+type TransitionalStateSpec struct {
+	// Strategy defines how virtbmc handles transient VM lifecycle states.
+	// +kubebuilder:validation:Enum=RetrySignal;ServerWait
+	// +kubebuilder:default:=RetrySignal
+	Strategy TransitionalStateStrategy `json:"strategy,omitempty"`
+
+	// MaxWaitSeconds is the maximum time to wait when strategy=ServerWait.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=120
+	// +kubebuilder:default:=60
+	MaxWaitSeconds *int32 `json:"maxWaitSeconds,omitempty"`
+
+	// PollIntervalSeconds is the polling interval when strategy=ServerWait.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=10
+	// +kubebuilder:default:=2
+	PollIntervalSeconds *int32 `json:"pollIntervalSeconds,omitempty"`
+}
+
 // VirtualMachineBMCSpec defines the desired state of VirtualMachineBMC.
 type VirtualMachineBMCSpec struct {
 	// Reference to the VM to manage.
@@ -39,6 +76,11 @@ type VirtualMachineBMCSpec struct {
 	// IPMI configures the IPMI simulator.
 	// +optional
 	IPMI *IPMISpec `json:"ipmi,omitempty"`
+
+	// TransitionalState configures how virtbmc handles transient VM lifecycle
+	// states during power operations.
+	// +optional
+	TransitionalState *TransitionalStateSpec `json:"transitionalState,omitempty"`
 }
 
 // IPMISpec defines the IPMI-specific configuration.

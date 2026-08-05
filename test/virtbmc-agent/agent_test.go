@@ -2,6 +2,7 @@ package virtbmcagent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -235,31 +236,6 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				_, _, err = runIPMIInCluster(ctx, config, ns, ipmiReq("power", "reset"))
 				Expect(err).NotTo(HaveOccurred())
 				waitForVMIPowerCycle(ctx, k8sClient, ns)
-			})
-
-			It("should return retryable error when power-on races with VMI cleanup", func() {
-				waitForVMIRunning(ctx, k8sClient, ns)
-				_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "soft"))
-				Expect(err).NotTo(HaveOccurred())
-
-				// Power on again before VMI cleanup completes: while the VMI
-				// lingers the handler returns Node Busy (0xC0), and a retry
-				// succeeds once the VMI is gone.
-				var sawNodeBusy bool
-				Eventually(func() error {
-					_, stderr, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
-					if err != nil {
-						sawNodeBusy = true
-						Expect(stderr).To(ContainSubstring("Node busy"),
-							"expected Node Busy retryable error, got stderr=%q", stderr)
-					}
-					return err
-				}, vmPowerStatusTimeout, agentTestInterval).Should(Succeed(),
-					"power on should eventually succeed after VMI cleanup")
-				Expect(sawNodeBusy).To(BeTrue(),
-					"expected at least one Node Busy retryable error before success")
-
-				waitForVMIRunning(ctx, k8sClient, ns)
 			})
 
 			It("should treat repeated power-on as idempotent during VM startup", func() {
@@ -1044,6 +1020,133 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 			It("should delete the DataVolume after EjectMedia", func() {
 				verifyDataVolumeDeleted(ctx, k8sClient, ns, agentVMName)
+			})
+		})
+	})
+
+	Context("Transitional state handling", func() {
+		refreshRedfishSession := func() {
+			Eventually(func() error {
+				var sessionErr error
+				authToken, sessionErr = CreateRedfishSession(ctx, config, ns, env.RedfishBaseURL, env.Username, env.Password)
+				return sessionErr
+			}, agentTestTimeout, agentTestInterval).Should(Succeed())
+			Expect(authToken).NotTo(BeEmpty())
+		}
+
+		Context("RetrySignal", func() {
+			BeforeAll(func() {
+				By("ensuring BMC uses RetrySignal and restarting the agent pod")
+				patchBMCTransitionalState(ctx, k8sClient, ns, retrySignalTransitionalStateSpec())
+				restartAgentPod(ctx, k8sClient, ns)
+				refreshRedfishSession()
+			})
+
+			It("should return retryable IPMI error when power-on races with VMI cleanup", func() {
+				waitForVMIRunning(ctx, k8sClient, ns)
+				_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "soft"))
+				Expect(err).NotTo(HaveOccurred())
+
+				// Power on again before VMI cleanup completes: while the VMI
+				// lingers the handler returns Node Busy (0xC0), and a retry
+				// succeeds once the VMI is gone.
+				var sawNodeBusy bool
+				Eventually(func() error {
+					_, stderr, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
+					if err != nil {
+						sawNodeBusy = true
+						Expect(stderr).To(ContainSubstring("Node busy"),
+							"expected Node Busy retryable error, got stderr=%q", stderr)
+					}
+					return err
+				}, vmPowerStatusTimeout, agentTestInterval).Should(Succeed(),
+					"power on should eventually succeed after VMI cleanup")
+				Expect(sawNodeBusy).To(BeTrue(),
+					"expected at least one Node Busy retryable error before success")
+
+				waitForVMIRunning(ctx, k8sClient, ns)
+			})
+
+			It("should return retryable Redfish error when power-on races with VMI cleanup", func() {
+				waitForVMIRunning(ctx, k8sClient, ns)
+				_, err := runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"GracefulShutdown"}`))
+				Expect(err).NotTo(HaveOccurred())
+
+				// Same race window as IPMI: sushy/Ironic clients retry HTTP 5xx
+				// responses whose body contains iLO InvalidOperationForSystemState.
+				var sawRetryable bool
+				Eventually(func() error {
+					out, err := runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"On"}`))
+					if err != nil {
+						return err
+					}
+					if strings.Contains(out, "InvalidOperationForSystemState") {
+						sawRetryable = true
+						Expect(out).To(ContainSubstring("500"),
+							"expected HTTP 500 retryable response, got: %s", out)
+						return fmt.Errorf("still in retryable transitional state")
+					}
+					if !strings.Contains(out, "200") && !strings.Contains(out, "204") {
+						return fmt.Errorf("unexpected Redfish response: %s", out)
+					}
+					return nil
+				}, vmPowerStatusTimeout, agentTestInterval).Should(Succeed(),
+					"Redfish power on should eventually succeed after VMI cleanup")
+				Expect(sawRetryable).To(BeTrue(),
+					"expected at least one iLO InvalidOperationForSystemState response before success")
+
+				waitForVMIRunning(ctx, k8sClient, ns)
+			})
+		})
+
+		Context("ServerWait", func() {
+			BeforeAll(func() {
+				By("switching BMC to ServerWait and restarting the agent pod")
+				patchBMCTransitionalState(ctx, k8sClient, ns, serverWaitTransitionalStateSpec())
+				restartAgentPod(ctx, k8sClient, ns)
+				refreshRedfishSession()
+			})
+
+			AfterAll(func() {
+				By("restoring default RetrySignal strategy and restarting the agent pod")
+				patchBMCTransitionalState(ctx, k8sClient, ns, nil)
+				restartAgentPod(ctx, k8sClient, ns)
+				refreshRedfishSession()
+			})
+
+			It("should block IPMI power-on internally when racing with VMI cleanup", func() {
+				waitForVMIRunning(ctx, k8sClient, ns)
+				_, _, err := runIPMIInCluster(ctx, config, ns, ipmiReq("power", "soft"))
+				Expect(err).NotTo(HaveOccurred())
+
+				_, stderr, elapsed, err := runIPMIInClusterTimed(ctx, config, ns, ipmiReq("power", "on"))
+				Expect(err).NotTo(HaveOccurred(),
+					"ServerWait should succeed in a single ipmitool call; stderr=%q", stderr)
+				Expect(stderr).NotTo(ContainSubstring("Node busy"),
+					"ServerWait must not expose retryable Node Busy to the client")
+				Expect(elapsed).To(BeNumerically(">=", 2*time.Second),
+					"ServerWait should block at least one poll interval before succeeding")
+
+				waitForVMIRunning(ctx, k8sClient, ns)
+			})
+
+			It("should block Redfish power-on internally when racing with VMI cleanup", func() {
+				waitForVMIRunning(ctx, k8sClient, ns)
+				_, err := runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"GracefulShutdown"}`))
+				Expect(err).NotTo(HaveOccurred())
+
+				req := redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"On"}`)
+				req.MaxTime = 90
+				out, err := runCurlRedfish(ctx, config, ns, req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(out).NotTo(ContainSubstring("InvalidOperationForSystemState"),
+					"ServerWait must not expose iLO retryable error to the client")
+				Expect(out).To(SatisfyAny(
+					ContainSubstring("200"),
+					ContainSubstring("204"),
+				))
+
+				waitForVMIRunning(ctx, k8sClient, ns)
 			})
 		})
 	})

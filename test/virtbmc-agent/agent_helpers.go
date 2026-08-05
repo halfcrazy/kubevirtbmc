@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
+	testutil "kubevirt.io/kubevirtbmc/test/util"
 )
 
 const (
@@ -152,6 +153,39 @@ func waitForVMIPresentBeforeReady(ctx context.Context, k8sClient client.Client, 
 		return !vmi.IsFinal()
 	}, vmPowerStatusTimeout, 50*time.Millisecond).Should(BeTrue(),
 		"expected VMI present while VM %s/%s is not Ready (startup race window)", namespace, agentVMName)
+}
+
+func patchBMCTransitionalState(ctx context.Context, k8sClient client.Client, namespace string, spec *bmcv1.TransitionalStateSpec) {
+	bmc := &bmcv1.VirtualMachineBMC{}
+	Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: agentBMCName}, bmc)).To(Succeed())
+	orig := bmc.DeepCopy()
+	bmc.Spec.TransitionalState = spec
+	Expect(k8sClient.Patch(ctx, bmc, client.MergeFrom(orig))).To(Succeed())
+}
+
+func restartAgentPod(ctx context.Context, k8sClient client.Client, namespace string) {
+	var podBefore corev1.Pod
+	Expect(k8sClient.Get(ctx, testutil.AgentPodKey(namespace), &podBefore)).To(Succeed())
+	oldUID := podBefore.UID
+	Expect(k8sClient.Delete(ctx, &podBefore)).To(Succeed())
+	Eventually(testutil.PodRunningAndReadyWithNewUID(ctx, k8sClient, namespace, oldUID), agentTestTimeout, agentTestInterval).
+		Should(BeTrue(), "agent pod should be recreated and ready")
+}
+
+func serverWaitTransitionalStateSpec() *bmcv1.TransitionalStateSpec {
+	maxWait := int32(60)
+	poll := int32(2)
+	return &bmcv1.TransitionalStateSpec{
+		Strategy:            bmcv1.TransitionalStateStrategyServerWait,
+		MaxWaitSeconds:      &maxWait,
+		PollIntervalSeconds: &poll,
+	}
+}
+
+func retrySignalTransitionalStateSpec() *bmcv1.TransitionalStateSpec {
+	return &bmcv1.TransitionalStateSpec{
+		Strategy: bmcv1.TransitionalStateStrategyRetrySignal,
+	}
 }
 
 func setVMRunStrategy(ctx context.Context, k8sClient client.Client, namespace string, strategy kubevirtv1.VirtualMachineRunStrategy) {
@@ -640,6 +674,7 @@ type RedfishRequest struct {
 	Username   string
 	Password   string
 	XAuthToken string
+	MaxTime    int // curl --max-time in seconds; 0 uses default (15)
 }
 
 func runCurlRedfish(ctx context.Context, cfg *rest.Config, namespace string, r RedfishRequest) (string, error) {
@@ -647,7 +682,7 @@ func runCurlRedfish(ctx context.Context, cfg *rest.Config, namespace string, r R
 	if r.Path != "" {
 		url = strings.TrimSuffix(r.BaseURL, "/") + r.Path
 	}
-	args := []string{"--connect-timeout", "5", "--max-time", "15", "-i", "-L", "-X", r.Method}
+	args := []string{"--connect-timeout", "5", "--max-time", strconv.Itoa(redfishCurlMaxTime(r)), "-i", "-L", "-X", r.Method}
 	if r.XAuthToken != "" {
 		args = append(args, "-H", "X-Auth-Token: "+r.XAuthToken)
 	} else if r.Username != "" && r.Password != "" {
@@ -660,6 +695,13 @@ func runCurlRedfish(ctx context.Context, cfg *rest.Config, namespace string, r R
 
 	out, _, err := runCurlInCluster(ctx, cfg, namespace, args...)
 	return out, err
+}
+
+func redfishCurlMaxTime(r RedfishRequest) int {
+	if r.MaxTime > 0 {
+		return r.MaxTime
+	}
+	return 15
 }
 
 func CreateRedfishSession(ctx context.Context, cfg *rest.Config, namespace, baseURL, username, password string) (token string, err error) {

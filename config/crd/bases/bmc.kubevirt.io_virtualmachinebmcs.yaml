@@ -76,6 +76,39 @@ spec:
                     description: Enabled toggles the IPMI simulator.
                     type: boolean
                 type: object
+              transitionalState:
+                description: |-
+                  TransitionalState configures how virtbmc handles transient VM lifecycle
+                  states during power operations.
+                properties:
+                  maxWaitSeconds:
+                    default: 60
+                    description: MaxWaitSeconds is the maximum time to wait when strategy=ServerWait.
+                    format: int32
+                    maximum: 120
+                    minimum: 1
+                    type: integer
+                  pollIntervalSeconds:
+                    default: 2
+                    description: PollIntervalSeconds is the polling interval when
+                      strategy=ServerWait.
+                    format: int32
+                    maximum: 10
+                    minimum: 1
+                    type: integer
+                  strategy:
+                    allOf:
+                    - enum:
+                      - RetrySignal
+                      - ServerWait
+                    - enum:
+                      - RetrySignal
+                      - ServerWait
+                    default: RetrySignal
+                    description: Strategy defines how virtbmc handles transient VM
+                      lifecycle states.
+                    type: string
+                type: object
               virtualMachineRef:
                 description: Reference to the VM to manage.
                 properties:
