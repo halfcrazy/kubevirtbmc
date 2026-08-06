@@ -86,8 +86,13 @@ func NewComputerSystem(id, name string, powerState server.ResourcePowerState) *C
 			BootSourceOverrideTarget:  server.COMPUTERSYSTEMBOOTSOURCE_HDD,
 		},
 		OperatingSystem: fmt.Sprintf("/redfish/v1/Systems/%s/OperatingSystem", id),
+		// The VirtualMedia service is provided by the manager: the spec
+		// defines the collection only under /redfish/v1/Managers/{id}, and
+		// per the ComputerSystem CSDL this link points at the collection
+		// this system uses. A system-local .../VirtualMedia URI does not
+		// exist in the spec and would dangle.
 		VirtualMedia: server.OdataV4IdRef{
-			OdataId: fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia", id),
+			OdataId: "/redfish/v1/Managers/BMC/VirtualMedia",
 		},
 		HostWatchdogTimer: server.ComputerSystemV1220WatchdogTimer{
 			FunctionEnabled: util.Ptr(false),
