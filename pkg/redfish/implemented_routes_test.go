@@ -34,3 +34,43 @@ func TestImplementedMethods(t *testing.T) {
 		t.Errorf("RedfishV1MetadataGet is a 501 stub and must not be registered")
 	}
 }
+
+// The service root must advertise every implemented top-level link and stay
+// clear of links whose backing collection GET is a stub.
+func TestServiceRootLinks(t *testing.T) {
+	for _, field := range []string{"Systems", "Managers", "SessionService"} {
+		if _, ok := serviceRootLinks[field]; !ok {
+			t.Errorf("serviceRootLinks missing %q; run 'make generate-implemented-routes'", field)
+		}
+	}
+	for _, field := range []string{"Chassis", "Tasks", "AccountService", "UpdateService"} {
+		if _, ok := serviceRootLinks[field]; ok {
+			t.Errorf("serviceRootLinks advertises %q but its collection GET is not implemented", field)
+		}
+	}
+}
+
+// The service root payload must carry exactly the advertised links plus the
+// schema-mandatory Links.Sessions, and must not resurrect pruned links as
+// empty objects.
+func TestGetServiceRootPayload(t *testing.T) {
+	root := NewHandler("user", "pass", nil).GetServiceRoot()
+	for field := range serviceRootLinks {
+		ref, ok := root[field].(map[string]string)
+		if !ok || ref["@odata.id"] == "" {
+			t.Errorf("service root link %q missing or malformed: %v", field, root[field])
+		}
+	}
+	for _, field := range []string{"Chassis", "Registries", "CompositionService", "ProtocolFeaturesSupported"} {
+		if _, ok := root[field]; ok {
+			t.Errorf("service root must not contain %q", field)
+		}
+	}
+	links, ok := root["Links"].(map[string]interface{})
+	if !ok || links["Sessions"] == nil {
+		t.Errorf("service root must contain the schema-required Links.Sessions: %v", root["Links"])
+	}
+	if root["Id"] == "" {
+		t.Errorf("service root must contain the schema-required Id")
+	}
+}

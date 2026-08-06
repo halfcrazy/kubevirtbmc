@@ -53762,16 +53762,7 @@ func (s *APIService) RedfishV1ServiceConditionsGet(ctx context.Context) (server.
 
 // RedfishV1SessionServiceGet -
 func (s *APIService) RedfishV1SessionServiceGet(ctx context.Context) (server.ImplResponse, error) {
-	// TODO - update RedfishV1SessionServiceGet with the required logic for this service method.
-	// Add api_default_service.go to the .openapi-generator-ignore to avoid overwriting this service implementation when updating open api generation.
-
-	// TODO: Uncomment the next line to return response Response(200, SessionServiceV118SessionService{}) or use other options such as http.Ok ...
-	// return Response(200, SessionServiceV118SessionService{}), nil
-
-	// TODO: Uncomment the next line to return response Response(0, RedfishError{}) or use other options such as http.Ok ...
-	// return Response(0, RedfishError{}), nil
-
-	return server.Response(http.StatusNotImplemented, nil), errors.New("RedfishV1SessionServiceGet method not implemented")
+	return server.Response(200, s.handler.GetSessionService()), nil
 }
 
 // RedfishV1SessionServicePut -

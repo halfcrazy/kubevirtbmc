@@ -15,6 +15,7 @@ var implementedMethods = map[string]bool{
 	"RedfishV1ManagersManagerIdVirtualMediaVirtualMediaIdActionsVirtualMediaEjectMediaPost":  true,
 	"RedfishV1ManagersManagerIdVirtualMediaVirtualMediaIdActionsVirtualMediaInsertMediaPost": true,
 	"RedfishV1ManagersManagerIdVirtualMediaVirtualMediaIdGet":                                true,
+	"RedfishV1SessionServiceGet":                                                             true,
 	"RedfishV1SessionServiceSessionsPost":                                                    true,
 	"RedfishV1SessionServiceSessionsSessionIdDelete":                                         true,
 	"RedfishV1SessionServiceSessionsSessionIdGet":                                            true,
@@ -24,4 +25,15 @@ var implementedMethods = map[string]bool{
 	"RedfishV1SystemsComputerSystemIdOperatingSystemGet":                                     true,
 	"RedfishV1SystemsComputerSystemIdPatch":                                                  true,
 	"RedfishV1SystemsGet":                                                                    true,
+}
+
+// serviceRootLinks maps each implemented ServiceRoot top-level link
+// property to its URI, so the service root only advertises links a
+// client can actually dereference (DSP0266 hypermedia discovery).
+// Derived from the OdataV4IdRef properties of the generated ServiceRoot
+// model, gated on the backing collection GET being implemented.
+var serviceRootLinks = map[string]string{
+	"Managers":       "/redfish/v1/Managers",
+	"SessionService": "/redfish/v1/SessionService",
+	"Systems":        "/redfish/v1/Systems",
 }

@@ -57,57 +57,48 @@ func (h *handler) DeleteSession(sessionID string) {
 	session.RemoveToken(sessionID)
 }
 
-func (h *handler) GetServiceRoot() *server.ServiceRootV1161ServiceRoot {
-	return &server.ServiceRootV1161ServiceRoot{
-		OdataContext:   "/redfish/v1/$metadata#ServiceRoot.ServiceRoot",
-		OdataId:        "/redfish/v1",
-		OdataType:      "#ServiceRoot.v1_16_1.ServiceRoot",
-		Description:    "ServiceRoot",
-		Name:           "ServiceRoot",
-		RedfishVersion: "1.16.1",
-		UUID:           util.Ptr("00000000-0000-0000-0000-000000000000"),
-		Chassis: server.OdataV4IdRef{
-			OdataId: "/redfish/v1/Chassis",
+// GetServiceRoot builds the payload as a map rather than the generated
+// ServiceRootV1161ServiceRoot struct: that struct's link fields are
+// OdataV4IdRef values, and encoding/json's omitempty never drops zero-value
+// structs, so unimplemented links would serialize as empty objects instead of
+// disappearing. The payload only advertises links whose subtree has a real
+// implementation (serviceRootLinks, generated) plus the schema-mandatory
+// Links.Sessions — clients discover the resource tree through this payload,
+// so every advertised link must be dereferenceable. ProtocolFeaturesSupported
+// is omitted because the service supports none of the query parameters
+// (DSP0266: include it only if query parameters are supported).
+func (h *handler) GetServiceRoot() map[string]interface{} {
+	root := map[string]interface{}{
+		"@odata.context": "/redfish/v1/$metadata#ServiceRoot.ServiceRoot",
+		"@odata.id":      "/redfish/v1",
+		"@odata.type":    "#ServiceRoot.v1_16_1.ServiceRoot",
+		"Description":    "ServiceRoot",
+		"Id":             "RootService",
+		"Name":           "ServiceRoot",
+		"RedfishVersion": "1.16.1",
+		"UUID":           "00000000-0000-0000-0000-000000000000",
+		"Links": map[string]interface{}{
+			"ManagerProvidingService": map[string]string{"@odata.id": "/redfish/v1/Managers/BMC"},
+			"Sessions":                map[string]string{"@odata.id": "/redfish/v1/SessionService/Sessions"},
 		},
-		Managers: server.OdataV4IdRef{
-			OdataId: "/redfish/v1/Managers",
-		},
-		Registries: server.OdataV4IdRef{
-			OdataId: "/redfish/v1/Registries",
-		},
-		SessionService: server.OdataV4IdRef{
-			OdataId: "/redfish/v1/SessionService",
-		},
-		Systems: server.OdataV4IdRef{
-			OdataId: "/redfish/v1/Systems",
-		},
-		Tasks: server.OdataV4IdRef{
-			OdataId: "/redfish/v1/Tasks",
-		},
-		AccountService: server.OdataV4IdRef{
-			OdataId: "/redfish/v1/AccountService",
-		},
-		EventService: server.OdataV4IdRef{
-			OdataId: "/redfish/v1/EventService",
-		},
-		TelemetryService: server.OdataV4IdRef{
-			OdataId: "/redfish/v1/TelemetryService",
-		},
-		UpdateService: server.OdataV4IdRef{
-			OdataId: "/redfish/v1/UpdateService",
-		},
-		CompositionService: server.OdataV4IdRef{
-			OdataId: "/redfish/v1/CompositionService",
-		},
-		ProtocolFeaturesSupported: server.ServiceRootV1161ProtocolFeaturesSupported{},
-		Links: server.ServiceRootV1161Links{
-			ManagerProvidingService: server.OdataV4IdRef{
-				OdataId: "/redfish/v1/Managers/BMC",
-			},
-			Oem: map[string]interface{}{},
-			Sessions: server.OdataV4IdRef{
-				OdataId: "/redfish/v1/SessionService/Sessions",
-			},
+	}
+	for name, uri := range serviceRootLinks {
+		root[name] = map[string]string{"@odata.id": uri}
+	}
+	return root
+}
+
+func (h *handler) GetSessionService() *server.SessionServiceV118SessionService {
+	return &server.SessionServiceV118SessionService{
+		OdataContext:   "/redfish/v1/$metadata#SessionService.SessionService",
+		OdataId:        "/redfish/v1/SessionService",
+		OdataType:      "#SessionService.v1_1_8.SessionService",
+		Description:    "Session Service",
+		Id:             "SessionService",
+		Name:           "Session Service",
+		ServiceEnabled: util.Ptr(true),
+		Sessions: server.OdataV4IdRef{
+			OdataId: "/redfish/v1/SessionService/Sessions",
 		},
 	}
 }

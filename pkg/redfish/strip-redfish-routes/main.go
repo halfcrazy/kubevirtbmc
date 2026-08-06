@@ -20,12 +20,15 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 )
 
 func main() {
 	input := flag.String("input", "api_service.go", "generated Redfish service implementation to scan")
+	model := flag.String("model", "../generated/redfish/server/model_service_root_v*_service_root.go", "glob locating the generated ServiceRoot model file")
 	output := flag.String("output", "implemented_routes_gen.go", "file to write the implemented method set to")
 	flag.Parse()
 
@@ -36,13 +39,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	implemented := make([]string, 0, len(f.Decls))
+	all := make(map[string]bool, len(f.Decls))
+	implementedSet := make(map[string]bool, len(f.Decls))
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || !isAPIServiceMethod(fn) || isNotImplementedStub(fn) {
+		if !ok || !isAPIServiceMethod(fn) {
 			continue
 		}
-		implemented = append(implemented, fn.Name.Name)
+		all[fn.Name.Name] = true
+		if !isNotImplementedStub(fn) {
+			implementedSet[fn.Name.Name] = true
+		}
+	}
+
+	links, err := deriveServiceRootLinks(*model, implementedSet, all)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "strip-redfish-routes: %v\n", err)
+		os.Exit(1)
+	}
+
+	implemented := make([]string, 0, len(implementedSet))
+	for name := range implementedSet {
+		implemented = append(implemented, name)
 	}
 	sort.Strings(implemented)
 
@@ -59,6 +77,22 @@ func main() {
 	}
 	b.WriteString("}\n")
 
+	b.WriteString("\n// serviceRootLinks maps each implemented ServiceRoot top-level link\n")
+	b.WriteString("// property to its URI, so the service root only advertises links a\n")
+	b.WriteString("// client can actually dereference (DSP0266 hypermedia discovery).\n")
+	b.WriteString("// Derived from the OdataV4IdRef properties of the generated ServiceRoot\n")
+	b.WriteString("// model, gated on the backing collection GET being implemented.\n")
+	b.WriteString("var serviceRootLinks = map[string]string{\n")
+	names := make([]string, 0, len(links))
+	for name := range links {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		fmt.Fprintf(&b, "\t%q: %q,\n", name, links[name])
+	}
+	b.WriteString("}\n")
+
 	src, err := format.Source([]byte(b.String()))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "strip-redfish-routes: format output: %v\n", err)
@@ -69,6 +103,93 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "strip-redfish-routes: %d implemented methods -> %s\n", len(implemented), *output)
+}
+
+// serviceRootSegmentOverrides maps ServiceRoot link properties whose URI
+// segment differs from the property name, per the Redfish.URISegment
+// annotations in the ServiceRoot CSDL.
+var serviceRootSegmentOverrides = map[string]string{
+	"Tasks": "TaskService",
+}
+
+// deriveServiceRootLinks reads the generated ServiceRoot model and returns the
+// link property name -> URI mapping for every top-level link whose backing
+// collection GET has a real implementation. Candidate links are the model's
+// OdataV4IdRef properties; the backing GET's name follows the generator's
+// RedfishV1<Segment>Get naming contract and is validated against all known
+// APIService methods, so a broken contract is reported rather than silently
+// dropping the link.
+func deriveServiceRootLinks(pattern string, implemented, all map[string]bool) (map[string]string, error) {
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) != 1 {
+		return nil, fmt.Errorf("service root model glob %q matched %v, want exactly 1 file", pattern, matches)
+	}
+
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, matches[0], nil, 0)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", matches[0], err)
+	}
+
+	links := map[string]string{}
+	for _, decl := range f.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+			for _, field := range st.Fields.List {
+				name, ok := serviceRootLinkField(field)
+				if !ok {
+					continue
+				}
+				segment := name
+				if o, ok := serviceRootSegmentOverrides[name]; ok {
+					segment = o
+				}
+				probe := "RedfishV1" + segment + "Get"
+				if !all[probe] {
+					fmt.Fprintf(os.Stderr, "strip-redfish-routes: no APIService method %q for ServiceRoot link %q, skipping\n", probe, name)
+					continue
+				}
+				if implemented[probe] {
+					links[name] = "/redfish/v1/" + segment
+				}
+			}
+		}
+	}
+	if len(links) == 0 {
+		return nil, fmt.Errorf("%s declares no implemented OdataV4IdRef links", matches[0])
+	}
+	return links, nil
+}
+
+// serviceRootLinkField returns the JSON name of a struct field if it is a
+// ServiceRoot top-level link, i.e. typed OdataV4IdRef.
+func serviceRootLinkField(field *ast.Field) (string, bool) {
+	ident, ok := field.Type.(*ast.Ident)
+	if !ok || ident.Name != "OdataV4IdRef" || len(field.Names) == 0 {
+		return "", false
+	}
+	name := field.Names[0].Name
+	if field.Tag != nil {
+		tag := reflect.StructTag(strings.Trim(field.Tag.Value, "`"))
+		if json := strings.Split(tag.Get("json"), ",")[0]; json != "" {
+			name = json
+		}
+	}
+	return name, true
 }
 
 func isAPIServiceMethod(fn *ast.FuncDecl) bool {
