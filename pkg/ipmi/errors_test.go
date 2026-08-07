@@ -41,11 +41,34 @@ func TestWithCompletionCode(t *testing.T) {
 		assert.Equal(t, goipmihandlers.CodeNodeBusy, cc)
 	})
 
+	t.Run("AmbiguousBootDeviceError maps to 0xD5 not supported in present state", func(t *testing.T) {
+		inner := &resourcemanager.AmbiguousBootDeviceError{
+			BootDevice: resourcemanager.BootDeviceCd,
+			Candidates: []string{"cdrom-a", "cdrom-b"},
+		}
+		err := withCompletionCode(inner)
+		cc, ok := completionCodeOf(t, err)
+		assert.True(t, ok)
+		assert.Equal(t, goipmihandlers.CodeNotSupportedInState, cc)
+	})
+
 	t.Run("unmapped errors pass through unchanged", func(t *testing.T) {
 		plain := fmt.Errorf("kubevirt api down")
 		err := withCompletionCode(plain)
 		assert.Equal(t, plain, err)
 		_, ok := completionCodeOf(t, err)
 		assert.False(t, ok, "go-ipmi should fall back to 0xFF Unspecified")
+	})
+
+	t.Run("domain types stay detectable through the wrapper", func(t *testing.T) {
+		inner := &resourcemanager.AmbiguousBootDeviceError{
+			BootDevice: resourcemanager.BootDeviceCd,
+			Candidates: []string{"cdrom-a", "cdrom-b"},
+		}
+		err := withCompletionCode(inner)
+		var ambiguous *resourcemanager.AmbiguousBootDeviceError
+		assert.True(t, errors.As(err, &ambiguous),
+			"completionCodeError.As must decline non-CompletionCode targets so unwrapping continues")
+		assert.Equal(t, inner, ambiguous)
 	})
 }

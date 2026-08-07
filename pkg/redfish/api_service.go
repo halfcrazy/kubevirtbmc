@@ -59761,6 +59761,25 @@ func (s *APIService) RedfishV1SystemsComputerSystemIdDelete(ctx context.Context,
 // RedfishV1SystemsComputerSystemIdPatch -
 func (s *APIService) RedfishV1SystemsComputerSystemIdPatch(ctx context.Context, computerSystemId string, computerSystemV1220ComputerSystem server.ComputerSystemV1220ComputerSystem) (server.ImplResponse, error) {
 	if err := s.handler.PatchComputerSystem(&computerSystemV1220ComputerSystem); err != nil {
+		var ambiguous *resourcemanager.AmbiguousBootDeviceError
+		if errors.As(err, &ambiguous) {
+			// The request is schema-valid but conflicts with the current
+			// state of the target ComputerSystem (RFC 9110 §15.5.10): no
+			// device of the requested category participates in bootOrder
+			// and multiple candidates exist. 4xx tells clients (Ironic)
+			// this is deterministic — retrying won't help, the VM's device
+			// configuration must change first.
+			return server.Response(http.StatusConflict, server.RedfishError{
+				Error: server.RedfishErrorError{
+					MessageExtendedInfo: []server.MessageV120Message{
+						{
+							MessageId: "Base.1.2.GeneralError",
+							Message:   err.Error(),
+						},
+					},
+				},
+			}), nil
+		}
 		return server.Response(http.StatusInternalServerError, server.RedfishError{
 			Error: server.RedfishErrorError{
 				MessageExtendedInfo: []server.MessageV120Message{
@@ -59931,6 +59950,22 @@ func (s *APIService) RedfishV1SystemsComputerSystemIdActionsComputerSystemSetDef
 	}
 
 	if err := s.handler.ComputerSystemSetDefaultBootOrder(bootOrder); err != nil {
+		var ambiguous *resourcemanager.AmbiguousBootDeviceError
+		if errors.As(err, &ambiguous) {
+			// Same conflict semantics as the PATCH path (RFC 9110
+			// §15.5.10): the requested category is ambiguous against the
+			// VM's present device configuration.
+			return server.Response(http.StatusConflict, server.RedfishError{
+				Error: server.RedfishErrorError{
+					MessageExtendedInfo: []server.MessageV120Message{
+						{
+							MessageId: "Base.1.2.GeneralError",
+							Message:   err.Error(),
+						},
+					},
+				},
+			}), nil
+		}
 		return server.Response(http.StatusInternalServerError, server.RedfishError{
 			Error: server.RedfishErrorError{
 				MessageExtendedInfo: []server.MessageV120Message{

@@ -6,6 +6,7 @@ import (
 
 	"github.com/bougou/go-ipmi/pkg/hal"
 	goipmihandlers "github.com/bougou/go-ipmi/pkg/handlers"
+	ipmi "github.com/bougou/go-ipmi/pkg/types"
 
 	"kubevirt.io/kubevirtbmc/pkg/resourcemanager"
 )
@@ -38,6 +39,12 @@ func (e *completionCodeError) As(target any) bool {
 //   - ErrRetryable → 0xC0 Node Busy: "command processing resources are
 //     temporarily unavailable" — a transitional VM state blocks the operation
 //     and a retry may succeed.
+//   - AmbiguousBootDeviceError → 0xD5 "Cannot execute command. Command, or
+//     request parameter(s), not supported in present state": the boot device
+//     selector itself is valid, but the VM's present device configuration
+//     (multiple candidates of the requested category, none participating in
+//     bootOrder) makes the selection unexecutable. Not 0xCC — the request
+//     data field is not invalid.
 func withCompletionCode(err error) error {
 	if err == nil {
 		return nil
@@ -46,6 +53,10 @@ func withCompletionCode(err error) error {
 	if errors.As(err, &retryable) {
 		return &completionCodeError{code: goipmihandlers.CodeNodeBusy, err: err}
 	}
+	var ambiguous *resourcemanager.AmbiguousBootDeviceError
+	if errors.As(err, &ambiguous) {
+		return &completionCodeError{code: goipmihandlers.CodeNotSupportedInState, err: err}
+	}
 	return err
 }
 
@@ -53,9 +64,9 @@ func withCompletionCode(err error) error {
 // in a dispatch middleware: go-ipmi's typed handlers swallow the HAL error
 // (returning only codeFromErr's byte), so the middleware chain never sees the
 // domain error. Only methods whose rm calls can return wire-mappable typed
-// errors — ErrRetryable from the power operations — are overridden; everything
-// else is promoted unchanged, which is the answer to "which methods need the
-// mapping": exactly these.
+// errors — ErrRetryable from the power operations, AmbiguousBootDeviceError
+// from SetBootDevice — are overridden; everything else is promoted unchanged,
+// which is the answer to "which methods need the mapping": exactly these.
 type codedChassis struct {
 	hal.ChassisHAL
 }
@@ -74,4 +85,8 @@ func (c codedChassis) ColdReset(ctx context.Context) error {
 
 func (c codedChassis) WarmReset(ctx context.Context) error {
 	return withCompletionCode(c.ChassisHAL.WarmReset(ctx))
+}
+
+func (c codedChassis) SetBootFlags(ctx context.Context, flags *ipmi.BootOptionParam_BootFlags) error {
+	return withCompletionCode(c.ChassisHAL.SetBootFlags(ctx, flags))
 }
