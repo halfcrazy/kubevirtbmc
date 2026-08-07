@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,6 +50,31 @@ func (m *VirtualMachineResourceManager) loadTransitionalStateConfig() error {
 	}
 	m.transitionalState = cfg
 	return nil
+}
+
+// tryThenVerify runs a power operation and, on failure, checks the real
+// VM/VMI state instead of depending on KubeVirt error strings: an operation
+// that failed because the state already converged is a success. Any other
+// failure is handed to handleTransitionalState, with the same convergence
+// check driving the wait polls.
+func (m *VirtualMachineResourceManager) tryThenVerify(
+	opName string,
+	verb string,
+	op func() error,
+	check func(*kubevirtv1.VirtualMachine, *kubevirtv1.VirtualMachineInstance) bool,
+) error {
+	err := op()
+	if err == nil {
+		return nil
+	}
+	vm, vmi, getErr := m.fetchVMAndVMI()
+	if getErr != nil {
+		return fmt.Errorf("%s failed: %w; verify state also failed: %v", verb, err, getErr)
+	}
+	if check(vm, vmi) {
+		return nil
+	}
+	return m.handleTransitionalState(opName, err, op, m.convergenceCheck(check))
 }
 
 func (m *VirtualMachineResourceManager) handleTransitionalState(
@@ -106,6 +132,42 @@ func (m *VirtualMachineResourceManager) serverWait(
 	}
 }
 
+// fetchVMAndVMI reads the current VM and VMI. The VMI read is best-effort:
+// a VM that is down or mid-teardown has no (readable) VMI, and the
+// convergence predicates treat a nil VMI as "no live VMI", so a VMI read
+// error is not fatal — only a VM read error is.
+func (m *VirtualMachineResourceManager) fetchVMAndVMI() (*kubevirtv1.VirtualMachine, *kubevirtv1.VirtualMachineInstance, error) {
+	vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
+		Get(m.ctx, m.name, metav1.GetOptions{})
+	if err != nil {
+		return nil, nil, err
+	}
+	vmi, vmiErr := m.virtClient.KubevirtV1().VirtualMachineInstances(m.namespace).
+		Get(m.ctx, m.name, metav1.GetOptions{})
+	if vmiErr != nil {
+		// Generated clientsets (real and fake alike, via client-go gentype)
+		// return a non-nil empty object alongside the error, so the error is
+		// the only failure signal; normalize to nil so vmi==nil keeps meaning
+		// "no live VMI" for the predicates.
+		vmi = nil
+	}
+	return vm, vmi, nil
+}
+
+// convergenceCheck adapts a VM/VMI convergence predicate into the polling
+// closure handleTransitionalState/serverWait expect.
+func (m *VirtualMachineResourceManager) convergenceCheck(
+	check func(*kubevirtv1.VirtualMachine, *kubevirtv1.VirtualMachineInstance) bool,
+) func() (bool, error) {
+	return func() (bool, error) {
+		vm, vmi, err := m.fetchVMAndVMI()
+		if err != nil {
+			return false, err
+		}
+		return check(vm, vmi), nil
+	}
+}
+
 // isPowerOnConverged reports whether the power-on intent is observable in the
 // VM/VMI state. vm.Status.Ready stays true while the VMI is gracefully
 // terminating (until the QEMU process exits), and Manual/RerunOnFailure keep
@@ -142,6 +204,12 @@ func isPowerOnConverged(vm *kubevirtv1.VirtualMachine, vmi *kubevirtv1.VirtualMa
 
 func isPowerOffConverged(vm *kubevirtv1.VirtualMachine) bool {
 	return !vm.Status.Ready && !hasPendingStartRequest(vm.Status.StateChangeRequests)
+}
+
+// powerOffConverged adapts isPowerOffConverged to the VM/VMI predicate shape
+// tryThenVerify takes; power-off convergence does not consult the VMI.
+func powerOffConverged(vm *kubevirtv1.VirtualMachine, _ *kubevirtv1.VirtualMachineInstance) bool {
+	return isPowerOffConverged(vm)
 }
 
 func isRestartConverged(vm *kubevirtv1.VirtualMachine) bool {

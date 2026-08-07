@@ -50,7 +50,7 @@ const (
 // operations issued through IPMI/Redfish.
 type TransitionalStateSpec struct {
 	// Strategy defines how virtbmc handles transient VM lifecycle states.
-	// +kubebuilder:validation:Enum=RetrySignal;ServerWait
+	// The enum constraint lives on the TransitionalStateStrategy type itself.
 	// +kubebuilder:default:=RetrySignal
 	Strategy TransitionalStateStrategy `json:"strategy,omitempty"`
 

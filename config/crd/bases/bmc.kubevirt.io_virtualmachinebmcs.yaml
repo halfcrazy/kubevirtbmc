@@ -101,16 +101,13 @@ spec:
                     minimum: 1
                     type: integer
                   strategy:
-                    allOf:
-                    - enum:
-                      - RetrySignal
-                      - ServerWait
-                    - enum:
-                      - RetrySignal
-                      - ServerWait
                     default: RetrySignal
-                    description: Strategy defines how virtbmc handles transient VM
-                      lifecycle states.
+                    description: |-
+                      Strategy defines how virtbmc handles transient VM lifecycle states.
+                      The enum constraint lives on the TransitionalStateStrategy type itself.
+                    enum:
+                    - RetrySignal
+                    - ServerWait
                     type: string
                 type: object
               virtualMachineRef:

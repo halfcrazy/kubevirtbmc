@@ -320,96 +320,24 @@ func hasPendingStopRequest(requests []kubevirtv1.VirtualMachineStateChangeReques
 }
 
 func (m *VirtualMachineResourceManager) PowerOn() error {
-	start := func() error {
+	return m.tryThenVerify("power on", "start", func() error {
 		return m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
 			Start(m.ctx, m.name, &kubevirtv1.StartOptions{})
-	}
-
-	// Try-Then-Verify: call Start first, then check VM real state on
-	// failure, avoiding dependency on KubeVirt error strings.
-	err := start()
-	if err == nil {
-		return nil
-	}
-	vm, getErr := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
-	if getErr != nil {
-		return fmt.Errorf("start failed: %w; verify state also failed: %v", err, getErr)
-	}
-	vmi, _ := m.virtClient.KubevirtV1().VirtualMachineInstances(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
-	if isPowerOnConverged(vm, vmi) {
-		return nil
-	}
-	return m.handleTransitionalState("power on", err, start, func() (bool, error) {
-		vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-			Get(m.ctx, m.name, metav1.GetOptions{})
-		if err != nil {
-			return false, err
-		}
-		vmi, vmiErr := m.virtClient.KubevirtV1().VirtualMachineInstances(m.namespace).
-			Get(m.ctx, m.name, metav1.GetOptions{})
-		if vmiErr != nil {
-			vmi = nil
-		}
-		return isPowerOnConverged(vm, vmi), nil
-	})
+	}, isPowerOnConverged)
 }
 
 func (m *VirtualMachineResourceManager) PowerOff() error {
-	stop := func() error {
+	return m.tryThenVerify("power off", "stop", func() error {
 		return m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
 			Stop(m.ctx, m.name, &kubevirtv1.StopOptions{})
-	}
-
-	err := stop()
-	if err == nil {
-		return nil
-	}
-	vm, getErr := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
-	if getErr != nil {
-		return fmt.Errorf("stop failed: %w; verify state also failed: %v", err, getErr)
-	}
-	if isPowerOffConverged(vm) {
-		return nil
-	}
-	return m.handleTransitionalState("power off", err, stop, func() (bool, error) {
-		vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-			Get(m.ctx, m.name, metav1.GetOptions{})
-		if err != nil {
-			return false, err
-		}
-		return isPowerOffConverged(vm), nil
-	})
+	}, powerOffConverged)
 }
 
 func (m *VirtualMachineResourceManager) ForcePowerOff() error {
-	stop := func() error {
+	return m.tryThenVerify("force power off", "force stop", func() error {
 		return m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
 			Stop(m.ctx, m.name, &kubevirtv1.StopOptions{GracePeriod: ptr.To[int64](0)})
-	}
-
-	err := stop()
-	if err == nil {
-		return nil
-	}
-	vm, getErr := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
-	if getErr != nil {
-		return fmt.Errorf("force stop failed: %w; verify state also failed: %v", err, getErr)
-	}
-	if isPowerOffConverged(vm) {
-		return nil
-	}
-	return m.handleTransitionalState("force power off", err, stop, func() (bool, error) {
-		vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-			Get(m.ctx, m.name, metav1.GetOptions{})
-		if err != nil {
-			return false, err
-		}
-		return isPowerOffConverged(vm), nil
-	})
+	}, powerOffConverged)
 }
 
 func (m *VirtualMachineResourceManager) PowerCycle() error {
@@ -462,15 +390,9 @@ func (m *VirtualMachineResourceManager) restartOrVerify(opts *kubevirtv1.Restart
 	if err == nil {
 		return nil
 	}
-	vm, getErr := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
+	vm, vmi, getErr := m.fetchVMAndVMI()
 	if getErr != nil {
 		return fmt.Errorf("restart failed: %w; verify state also failed: %v", err, getErr)
-	}
-	vmi, vmiErr := m.virtClient.KubevirtV1().VirtualMachineInstances(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
-	if vmiErr != nil {
-		vmi = nil
 	}
 	if isPowerCycleConverged(vm, vmi) {
 		return nil
@@ -494,19 +416,7 @@ func (m *VirtualMachineResourceManager) restartOrVerify(opts *kubevirtv1.Restart
 			return err
 		}
 		return restart()
-	}, func() (bool, error) {
-		vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-			Get(m.ctx, m.name, metav1.GetOptions{})
-		if err != nil {
-			return false, err
-		}
-		vmi, vmiErr := m.virtClient.KubevirtV1().VirtualMachineInstances(m.namespace).
-			Get(m.ctx, m.name, metav1.GetOptions{})
-		if vmiErr != nil {
-			vmi = nil
-		}
-		return isPowerCycleConverged(vm, vmi), nil
-	})
+	}, m.convergenceCheck(isPowerCycleConverged))
 }
 
 // GetBootFlags derives the current boot flags — boot device (lowest bootOrder),
