@@ -1,0 +1,13 @@
+# Applied by install-metal3.sh via envsubst.
+# BMO reads Ironic connection settings from a ConfigMap literally named "ironic"
+# in its own namespace; values point at the IrSO Service DNS, not br-prov host ports.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ironic
+  namespace: ${IRONIC_NS}
+data:
+  IRONIC_ENDPOINT: "${IRONIC_ENDPOINT}"
+  DEPLOY_KERNEL_URL: "${DEPLOY_KERNEL_URL}"
+  DEPLOY_RAMDISK_URL: "${DEPLOY_RAMDISK_URL}"
+  CACHEURL: "${CACHEURL}"

@@ -201,6 +201,10 @@ metal3-e2e-test: generate fmt vet ## Run Metal3/Ironic integration tests (requir
 	# go test -timeout bounds the process; -ginkgo.timeout bounds the suite (Ginkgo default is 1h).
 	KIND_CLUSTER=$(METAL3_CLUSTER) go test -v ./test/metal3-e2e/... -ginkgo.v -ginkgo.timeout=120m -timeout 120m
 
+.PHONY: metal3-e2e-diagnostics
+metal3-e2e-diagnostics: ## Dump Metal3 e2e diagnostics (pods, BMH, Ironic logs) into ./artifacts. Best-effort, never fails.
+	@CLUSTER_NAME=$(METAL3_CLUSTER) bash hack/metal3-e2e/collect-diagnostics.sh
+
 .PHONY: local-metal3-e2e-test
 local-metal3-e2e-test: metal3-e2e-setup metal3-e2e-test metal3-e2e-teardown ## Full Metal3 e2e locally (heavy). KEEP_ENV=true keeps Kind+stack.
 

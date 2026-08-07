@@ -45,41 +45,25 @@ echo "==> Ironic API credentials secret: ${SECRET}"
 
 # IrSO ClusterIP Service maps API→80, images→8080 (hostNetwork target ports 6385/6180).
 # Prefer Service DNS over br-prov IP so BMO does not depend on a hardcoded address.
+# Exported so envsubst on fixtures/bmo-configmap.yaml can see them.
 IRONIC_ENDPOINT="http://ironic.${IRONIC_NS}.svc/v1/"
 DEPLOY_KERNEL_URL="http://ironic.${IRONIC_NS}.svc:8080/images/ironic-python-agent.kernel"
 DEPLOY_RAMDISK_URL="http://ironic.${IRONIC_NS}.svc:8080/images/ironic-python-agent.initramfs"
 CACHEURL="http://ironic.${IRONIC_NS}.svc:8080/images"
+export IRONIC_ENDPOINT DEPLOY_KERNEL_URL DEPLOY_RAMDISK_URL CACHEURL
 
 echo "==> installing Bare Metal Operator ${BMO_VERSION}"
 kubectl apply -f "${BMO_MANIFEST}"
 
 echo "==> pointing BMO at IrSO Service (${IRONIC_ENDPOINT})"
-kubectl -n "${IRONIC_NS}" apply -f - <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: ironic
-  namespace: ${IRONIC_NS}
-data:
-  IRONIC_ENDPOINT: "${IRONIC_ENDPOINT}"
-  DEPLOY_KERNEL_URL: "${DEPLOY_KERNEL_URL}"
-  DEPLOY_RAMDISK_URL: "${DEPLOY_RAMDISK_URL}"
-  CACHEURL: "${CACHEURL}"
-EOF
+envsubst '${IRONIC_NS} ${IRONIC_ENDPOINT} ${DEPLOY_KERNEL_URL} ${DEPLOY_RAMDISK_URL} ${CACHEURL}' \
+  < "${ROOT_DIR}/hack/metal3-e2e/fixtures/bmo-configmap.yaml" | kubectl apply -f -
 
 USER=$(kubectl get secret "${SECRET}" -n "${IRONIC_NS}" -o jsonpath='{.data.username}' | base64 -d)
 PASS=$(kubectl get secret "${SECRET}" -n "${IRONIC_NS}" -o jsonpath='{.data.password}' | base64 -d)
-kubectl -n "${IRONIC_NS}" apply -f - <<EOF
-apiVersion: v1
-kind: Secret
-metadata:
-  name: ironic-credentials
-  namespace: ${IRONIC_NS}
-type: Opaque
-stringData:
-  username: "${USER}"
-  password: "${PASS}"
-EOF
+kubectl create secret generic ironic-credentials -n "${IRONIC_NS}" \
+  --from-literal=username="${USER}" --from-literal=password="${PASS}" \
+  --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl -n "${IRONIC_NS}" patch deployment baremetal-operator-controller-manager \
   --patch-file="${ROOT_DIR}/hack/metal3-e2e/fixtures/bmo-auth-patch.yaml"

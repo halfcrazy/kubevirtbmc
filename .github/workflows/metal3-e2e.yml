@@ -3,6 +3,8 @@ name: Metal3 Ironic Integration E2E
 # Release-grade; not triggered on PRs.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * 1"
   push:
     tags:
       - "v*"
@@ -66,9 +68,9 @@ jobs:
         with:
           # Consumed by cacheUserImageOnIronicHTTPD via os.TempDir(). Key covers
           # both ways the image can change: the METAL3_USER_IMAGE_* job env
-          # overrides and the default URL/checksum constants in provision_helpers.go.
+          # overrides and the default URL/checksum constants in provision_helpers_test.go.
           path: /tmp/metal3-user.qcow2
-          key: metal3-user-image-${{ hashFiles('test/metal3-e2e/provision_helpers.go') }}-${{ env.METAL3_USER_IMAGE_URL }}-${{ env.METAL3_USER_IMAGE_CHECKSUM }}
+          key: metal3-user-image-${{ hashFiles('test/metal3-e2e/provision_helpers_test.go') }}-${{ env.METAL3_USER_IMAGE_URL }}-${{ env.METAL3_USER_IMAGE_CHECKSUM }}
 
       - name: Metal3 e2e tests
         run: make metal3-e2e-test
@@ -78,21 +80,7 @@ jobs:
 
       - name: Collect diagnostics
         if: always()
-        run: |
-          mkdir -p artifacts
-          kubectl get pods -A > artifacts/pods.txt || true
-          kubectl get network-attachment-definitions -A -o yaml > artifacts/nads.yaml || true
-          kubectl get virtualmachinebmc,vm,vmi -A -o yaml > artifacts/kvbmc.yaml || true
-          kubectl get bmh -A -o yaml > artifacts/bmh.yaml || true
-          docker exec kvbmc-metal3-e2e-control-plane ip addr > artifacts/node-ip.txt || true
-          docker exec kvbmc-metal3-e2e-control-plane ip link show br-prov > artifacts/br-prov.txt || true
-          # Per-stage timestamps to locate provisioning stalls: dnsmasq shows
-          # DHCP rounds + TFTP events, httpd shows kernel/initramfs GETs,
-          # conductor shows deploy transitions and heartbeat waits.
-          IR=$(kubectl -n baremetal-operator-system get pod -l ironic.metal3.io/app=ironic-service -o jsonpath='{.items[0].metadata.name}')
-          for c in dnsmasq httpd ironic; do
-            kubectl -n baremetal-operator-system logs "$IR" -c "$c" --timestamps > "artifacts/ironic-$c.log" || true
-          done
+        run: make metal3-e2e-diagnostics
 
       - name: Upload diagnostics
         if: always()
