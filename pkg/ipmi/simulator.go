@@ -157,7 +157,7 @@ func (s *Simulator) buildBMC() *bmc.BMC {
 
 	guid := s.resolveGUID()
 
-	b := bmc.New(info, guid, noopHAL{chassis: vmChassis{rm: s.rm}}, bmc.WithKG(nil))
+	b := bmc.New(info, guid, noopHAL{chassis: codedChassis{ChassisHAL: vmChassis{rm: s.rm}}}, bmc.WithKG(nil))
 
 	// Register the configured BMC user so RAKP username/password auth succeeds.
 	if s.username != "" {
