@@ -448,7 +448,10 @@ func (m *VirtualMachineResourceManager) powerCycle(force bool) error {
 }
 
 // restartOrVerify issues Restart and, on failure, classifies the outcome via
-// the same Try-Then-Verify pattern as PowerOn/PowerOff.
+// the same Try-Then-Verify pattern as PowerOn/PowerOff. When waiting out a
+// transitional state, the cycle is completed via Start once the VMI is gone —
+// mirroring the immediate PowerOn fallback below — because a bare Restart
+// retry can never succeed after the VMI disappears.
 func (m *VirtualMachineResourceManager) restartOrVerify(opts *kubevirtv1.RestartOptions) error {
 	restart := func() error {
 		return m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
@@ -464,34 +467,46 @@ func (m *VirtualMachineResourceManager) restartOrVerify(opts *kubevirtv1.Restart
 	if getErr != nil {
 		return fmt.Errorf("restart failed: %w; verify state also failed: %v", err, getErr)
 	}
-	if isRestartConverged(vm) {
-		return nil
-	}
-	scrs := vm.Status.StateChangeRequests
-	if hasPendingStopRequest(scrs) || hasPendingStartRequest(scrs) {
-		return m.handleTransitionalState("power cycle", err, restart, func() (bool, error) {
-			vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-				Get(m.ctx, m.name, metav1.GetOptions{})
-			if err != nil {
-				return false, err
-			}
-			return isRestartConverged(vm), nil
-		})
-	}
 	vmi, vmiErr := m.virtClient.KubevirtV1().VirtualMachineInstances(m.namespace).
 		Get(m.ctx, m.name, metav1.GetOptions{})
-	if vmiErr == nil && !vmi.IsFinal() {
-		return m.handleTransitionalState("power cycle", err, restart, func() (bool, error) {
-			vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-				Get(m.ctx, m.name, metav1.GetOptions{})
-			if err != nil {
-				return false, err
-			}
-			return isRestartConverged(vm), nil
-		})
+	if vmiErr != nil {
+		vmi = nil
 	}
-	// VMI gone between GetPowerStatus and Restart: complete the cycle via PowerOn.
-	return m.PowerOn()
+	if isPowerCycleConverged(vm, vmi) {
+		return nil
+	}
+	// VMI gone between GetPowerStatus and Restart with nothing in flight:
+	// complete the cycle via PowerOn.
+	if vmi == nil || vmi.IsFinal() {
+		return m.PowerOn()
+	}
+	// Transitional: a partial SCR (start/stop in flight) or a VMI that is
+	// starting or terminating. Wait for the transition to settle; once the
+	// VMI is gone the cycle can only be completed by Start, not Restart.
+	return m.handleTransitionalState("power cycle", err, func() error {
+		vmi, err := m.virtClient.KubevirtV1().VirtualMachineInstances(m.namespace).
+			Get(m.ctx, m.name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) || (err == nil && vmi.IsFinal()) {
+			return m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
+				Start(m.ctx, m.name, &kubevirtv1.StartOptions{})
+		}
+		if err != nil {
+			return err
+		}
+		return restart()
+	}, func() (bool, error) {
+		vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
+			Get(m.ctx, m.name, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		vmi, vmiErr := m.virtClient.KubevirtV1().VirtualMachineInstances(m.namespace).
+			Get(m.ctx, m.name, metav1.GetOptions{})
+		if vmiErr != nil {
+			vmi = nil
+		}
+		return isPowerCycleConverged(vm, vmi), nil
+	})
 }
 
 // GetBootFlags derives the current boot flags — boot device (lowest bootOrder),

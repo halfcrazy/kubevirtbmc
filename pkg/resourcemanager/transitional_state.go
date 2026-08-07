@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -56,6 +57,14 @@ func (m *VirtualMachineResourceManager) handleTransitionalState(
 	retryOp func() error,
 	converged func() (bool, error),
 ) error {
+	// Re-read the strategy on the transitional path so CR edits take effect
+	// without a virtbmc pod restart. Best-effort: a failed read keeps the
+	// previously loaded config rather than failing the power operation.
+	if m.bmcClient != nil {
+		if err := m.loadTransitionalStateConfig(); err != nil {
+			logrus.WithError(err).Warn("failed to reload transitional state config, using cached value")
+		}
+	}
 	if m.transitionalState.Strategy != bmcv1.TransitionalStateStrategyServerWait {
 		return &ErrRetryable{Err: opErr}
 	}
@@ -97,8 +106,18 @@ func (m *VirtualMachineResourceManager) serverWait(
 	}
 }
 
+// isPowerOnConverged reports whether the power-on intent is observable in the
+// VM/VMI state. vm.Status.Ready stays true while the VMI is gracefully
+// terminating (until the QEMU process exits), and Manual/RerunOnFailure keep
+// their run intent while a Stop is underway (Stop travels via
+// StateChangeRequests, leaving runStrategy untouched), so "on" must be
+// verified against the VMI's direction: only a VMI that is neither
+// terminating nor final counts.
 func isPowerOnConverged(vm *kubevirtv1.VirtualMachine, vmi *kubevirtv1.VirtualMachineInstance) bool {
-	if vm.Status.Ready && vmDesiresRunning(vm) && !hasPendingStopRequest(vm.Status.StateChangeRequests) {
+	vmiAlive := vmi != nil && vmi.DeletionTimestamp.IsZero() && !vmi.IsFinal()
+
+	if vm.Status.Ready && vmDesiresRunning(vm) &&
+		!hasPendingStopRequest(vm.Status.StateChangeRequests) && vmiAlive {
 		return true
 	}
 	if hasPendingStartRequest(vm.Status.StateChangeRequests) &&
@@ -106,13 +125,16 @@ func isPowerOnConverged(vm *kubevirtv1.VirtualMachine, vmi *kubevirtv1.VirtualMa
 		return true
 	}
 	rs, rsErr := vm.RunStrategy()
+	// Always is safe without the VMI check: Stop flips the strategy to Halted
+	// before the VMI is torn down, so observing Always means no stop is
+	// underway and KubeVirt itself guarantees the run intent.
 	if rsErr == nil && rs == kubevirtv1.RunStrategyAlways {
 		return true
 	}
 	if rsErr == nil &&
 		(rs == kubevirtv1.RunStrategyManual || rs == kubevirtv1.RunStrategyRerunOnFailure) &&
 		!hasPendingStopRequest(vm.Status.StateChangeRequests) &&
-		vmi != nil && !vmi.IsFinal() {
+		vmiAlive {
 		return true
 	}
 	return false
@@ -125,4 +147,14 @@ func isPowerOffConverged(vm *kubevirtv1.VirtualMachine) bool {
 func isRestartConverged(vm *kubevirtv1.VirtualMachine) bool {
 	scrs := vm.Status.StateChangeRequests
 	return hasPendingStopRequest(scrs) && hasPendingStartRequest(scrs)
+}
+
+// isPowerCycleConverged reports whether a power cycle intent is satisfied:
+// either a full restart (stop+start) is queued, or the VM reached a genuinely
+// running state. The wait path is only entered after a Restart failure, so
+// observing a healthy running VMI implies the in-flight transition (whoever
+// triggered it) completed — retrying Restart at that point would cycle the
+// VM a second time.
+func isPowerCycleConverged(vm *kubevirtv1.VirtualMachine, vmi *kubevirtv1.VirtualMachineInstance) bool {
+	return isRestartConverged(vm) || isPowerOnConverged(vm, vmi)
 }

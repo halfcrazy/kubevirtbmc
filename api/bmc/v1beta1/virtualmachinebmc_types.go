@@ -40,7 +40,9 @@ const (
 	TransitionalStateStrategyRetrySignal TransitionalStateStrategy = "RetrySignal"
 	// TransitionalStateStrategyServerWait blocks until the operation converges
 	// or times out. Suitable for Tinkerbell/Foreman clients that do not retry
-	// busy signals.
+	// busy signals. The wait runs inside the virtbmc pod and is not cancelled
+	// when the client disconnects, so maxWaitSeconds should stay below the
+	// client's own request timeout for the success to be observable.
 	TransitionalStateStrategyServerWait TransitionalStateStrategy = "ServerWait"
 )
 
@@ -53,6 +55,9 @@ type TransitionalStateSpec struct {
 	Strategy TransitionalStateStrategy `json:"strategy,omitempty"`
 
 	// MaxWaitSeconds is the maximum time to wait when strategy=ServerWait.
+	// Keep it below the BMC client's own request timeout (IPMI and Redfish
+	// alike), otherwise the client gives up before the deferred success is
+	// returned.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=120
 	// +kubebuilder:default:=60

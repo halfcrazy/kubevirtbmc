@@ -83,7 +83,11 @@ spec:
                 properties:
                   maxWaitSeconds:
                     default: 60
-                    description: MaxWaitSeconds is the maximum time to wait when strategy=ServerWait.
+                    description: |-
+                      MaxWaitSeconds is the maximum time to wait when strategy=ServerWait.
+                      Keep it below the BMC client's own request timeout (IPMI and Redfish
+                      alike), otherwise the client gives up before the deferred success is
+                      returned.
                     format: int32
                     maximum: 120
                     minimum: 1
