@@ -114,6 +114,8 @@ make manifests generate generate-kubevirt-crd
 
 The CI pipeline verifies that generated files are committed and up-to-date. Always run this before opening a PR if you changed any API types.
 
+Implementing a new Redfish endpoint (`pkg/redfish/api_service.go`) also falls under `make generate`: it regenerates `pkg/redfish/implemented_routes_gen.go`, the route set the agent registers. Without it the new endpoint answers 404, and the CI freshness check fails on the dirty tree.
+
 #### Formatting and Vetting
 
 ```bash
