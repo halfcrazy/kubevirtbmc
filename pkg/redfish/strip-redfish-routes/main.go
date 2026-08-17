@@ -85,15 +85,19 @@ func isAPIServiceMethod(fn *ast.FuncDecl) bool {
 
 // isNotImplementedStub reports whether the method body references
 // http.StatusNotImplemented. Generated stubs always do; a real implementation
-// must not, otherwise it would be dropped from the route table.
+// must not, otherwise it would be dropped from the route table. Only the
+// net/http constant counts: a real implementation may legitimately reference
+// some other StatusNotImplemented constant.
 func isNotImplementedStub(fn *ast.FuncDecl) bool {
 	stub := false
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		if stub {
 			return false
 		}
-		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "StatusNotImplemented" {
-			stub = true
+		if sel, ok := n.(*ast.SelectorExpr); ok {
+			if x, ok := sel.X.(*ast.Ident); ok && x.Name == "http" && sel.Sel.Name == "StatusNotImplemented" {
+				stub = true
+			}
 		}
 		return !stub
 	})
