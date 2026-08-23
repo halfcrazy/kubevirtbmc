@@ -1,6 +1,6 @@
 name: Metal3 Ironic Integration E2E
 
-# Release-grade; not triggered on PRs.
+# Release-grade; PRs only run it when the Metal3 e2e harness itself changes.
 on:
   workflow_dispatch:
   schedule:
@@ -8,6 +8,11 @@ on:
   push:
     tags:
       - "v*"
+  pull_request:
+    paths:
+      - "hack/metal3-e2e/**"
+      - "test/metal3-e2e/**"
+      - ".github/workflows/metal3-e2e.yml"
 
 jobs:
   metal3-e2e:
@@ -19,8 +24,7 @@ jobs:
       REPO: kubevirtbmc
       MANAGER: virtbmc-controller
       AGENT: virtbmc
-      VERSION: ${{ github.ref_name }}
-      TAG: ${{ github.ref_name }}
+      VERSION: ${{ github.event_name == 'pull_request' && format('pr-{0}-head', github.event.number) || github.ref_name }}
       GIT_COMMIT: ${{ github.sha }}
       KIND_CLUSTER: kvbmc-metal3-e2e
       CERT_MANAGER_VERSION: v1.14.2
@@ -46,7 +50,7 @@ jobs:
           file: Dockerfile
           push: false
           load: true
-          tags: ${{ env.REPO }}/${{ env.MANAGER }}:${{ env.TAG }}
+          tags: ${{ env.REPO }}/${{ env.MANAGER }}:${{ env.VERSION }}
 
       - name: Docker build agent
         uses: docker/build-push-action@v6
@@ -58,7 +62,7 @@ jobs:
           file: Dockerfile.virtbmc
           push: false
           load: true
-          tags: ${{ env.REPO }}/${{ env.AGENT }}:${{ env.TAG }}
+          tags: ${{ env.REPO }}/${{ env.AGENT }}:${{ env.VERSION }}
 
       - name: Metal3 e2e setup (Kind + br-prov + Multus)
         run: make metal3-e2e-setup
@@ -74,9 +78,6 @@ jobs:
 
       - name: Metal3 e2e tests
         run: make metal3-e2e-test
-        env:
-          REPO: ${{ env.REPO }}
-          TAG: ${{ env.TAG }}
 
       - name: Collect diagnostics
         if: always()
