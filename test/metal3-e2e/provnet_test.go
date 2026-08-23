@@ -7,6 +7,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -114,12 +115,12 @@ var _ = Describe("provisioning network (br-prov + Multus)", Ordered, func() {
 
 		By("waiting for virtbmc agent pod Ready")
 		Eventually(func(g Gomega) {
-			var pod corev1.Pod
+			var deploy appsv1.Deployment
 			g.Expect(k8sClient.Get(ctx, client.ObjectKey{
 				Namespace: provNS,
 				Name:      provVMName + "-virtbmc",
-			}, &pod)).To(Succeed())
-			g.Expect(pod.Status.Phase).To(Equal(corev1.PodRunning))
+			}, &deploy)).To(Succeed())
+			g.Expect(deploy.Status.ReadyReplicas).To(BeNumerically(">=", 1))
 		}, testTimeout, testInterval).Should(Succeed())
 	})
 })
