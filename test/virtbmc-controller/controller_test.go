@@ -25,6 +25,7 @@ const (
 	webhookServiceName      = "kubevirtbmc-webhook-service"
 	webhookServiceNamespace = "kubevirtbmc-system"
 	vmDeletionTimeout       = time.Second * 120
+	vmiFirstBootTimeout     = time.Second * 300
 )
 
 var (
@@ -110,7 +111,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 				}
 			}
 			By("waiting for the VirtualMachineInstance to reach Running phase")
-			Eventually(util.VMIRunning(ctx, k8sClient, util.E2EVMName, util.E2ENamespace), timeout, interval).Should(BeTrue(), "VMI should reach Running state")
+			Eventually(util.VMIRunning(ctx, k8sClient, util.E2EVMName, util.E2ENamespace), vmiFirstBootTimeout, interval).Should(BeTrue(), "VMI should reach Running state")
 		})
 
 		It("should allow creating a VirtualMachineBMC", func() {
