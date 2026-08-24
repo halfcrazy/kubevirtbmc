@@ -1,11 +1,11 @@
 name: Metal3 Ironic Integration E2E
 
-# Release-grade; PRs only run it when the Metal3 e2e harness itself changes.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 2 * * 1"
   push:
+    branches:
+      - main
+      - "v*"
     tags:
       - "v*"
   pull_request:
@@ -24,7 +24,7 @@ jobs:
       REPO: kubevirtbmc
       MANAGER: virtbmc-controller
       AGENT: virtbmc
-      VERSION: ${{ github.event_name == 'pull_request' && format('pr-{0}-head', github.event.number) || github.ref_name }}
+      VERSION: ${{ github.event_name == 'pull_request' && format('pr-{0}-head', github.event.number) || (github.ref_type == 'branch' && format('{0}-head', github.ref_name) || github.ref_name) }}
       GIT_COMMIT: ${{ github.sha }}
       KIND_CLUSTER: kvbmc-metal3-e2e
       CERT_MANAGER_VERSION: v1.14.2
