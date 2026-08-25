@@ -1,0 +1,113 @@
+name: Redfish Interop
+
+# Runs the DMTF Redfish-Interop-Validator against the Redfish API served by
+# hack/redfish/interopserver (the real VirtualMachineResourceManager on
+# in-memory fake clients — no cluster, no KubeVirt). On PRs the base ref is
+# validated too, and the step summary diffs the two runs: regressions
+# introduced vs. failures fixed by the PR.
+# Informational only: the job stays green while known profile gaps exist.
+
+on:
+  pull_request:
+    paths:
+      - "pkg/redfish/**"
+      - "pkg/resourcemanager/**"
+      - "pkg/generated/redfish/**"
+      - "pkg/session/**"
+      - "hack/redfish/**"
+      - ".github/workflows/redfish-interop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: redfish-interop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROFILE: hack/redfish/profiles/OpenStackIronicProfile.v1_2_0.json
+  VALIDATOR_VERSION: "2.3.6"
+  BMC_USER: admin
+  BMC_PASSWORD: password
+  BMC_URL: http://127.0.0.1:8000
+
+jobs:
+  interop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # On pull_request events this is the synthetic merge commit, i.e. the
+      # post-merge result.
+      - name: Check out PR head
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install Redfish-Interop-Validator
+        run: pip install "redfish_interop_validator==${{ env.VALIDATOR_VERSION }}"
+
+      - name: Validate PR head
+        run: |
+          mkdir -p logs/head
+          go build -o /tmp/interopserver-head ./hack/redfish/interopserver
+          /tmp/interopserver-head &
+          server_pid=$!
+          curl -sf --retry 30 --retry-delay 1 --retry-connrefused \
+            -u "$BMC_USER:$BMC_PASSWORD" "$BMC_URL/redfish/v1/" > /dev/null
+          rf_interop_validator -i "$BMC_URL" -u "$BMC_USER" -p "$BMC_PASSWORD" \
+            --authtype Basic --forceauth --no_online_profiles \
+            --logdir logs/head "$PROFILE" 2>&1 | tee logs/head/stdout.txt
+          kill $server_pid
+
+      - name: Check out base ref
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref }}
+          path: base
+
+      - name: Validate base ref
+        if: github.event_name == 'pull_request'
+        run: |
+          # Base refs from before the interopserver existed can't be compared.
+          if [ ! -d base/hack/redfish/interopserver ]; then
+            echo "Base ref has no hack/redfish/interopserver; skipping base run."
+            exit 0
+          fi
+          mkdir -p logs/base
+          cd base
+          go build -o /tmp/interopserver-base ./hack/redfish/interopserver
+          /tmp/interopserver-base &
+          server_pid=$!
+          curl -sf --retry 30 --retry-delay 1 --retry-connrefused \
+            -u "$BMC_USER:$BMC_PASSWORD" "$BMC_URL/redfish/v1/" > /dev/null
+          # PROFILE is vendored by this PR; base refs may not have it yet.
+          rf_interop_validator -i "$BMC_URL" -u "$BMC_USER" -p "$BMC_PASSWORD" \
+            --authtype Basic --forceauth --no_online_profiles \
+            --logdir ../logs/base "$GITHUB_WORKSPACE/$PROFILE" 2>&1 | tee ../logs/base/stdout.txt
+          kill $server_pid
+
+      - name: Report
+        run: |
+          if [ -d logs/base ]; then
+            python3 hack/redfish/interop-diff.py logs/head logs/base >> "$GITHUB_STEP_SUMMARY"
+          else
+            python3 hack/redfish/interop-diff.py logs/head >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload validator logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: redfish-interop-logs
+          path: logs/
+          retention-days: 14
