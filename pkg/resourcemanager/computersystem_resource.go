@@ -66,7 +66,6 @@ func NewComputerSystem(id, name string, powerState server.ResourcePowerState) *C
 		Status:       server.ResourceStatus{},
 		SystemType:   server.COMPUTERSYSTEMV1220SYSTEMTYPE_VIRTUAL,
 		Links:        server.ComputerSystemV1220Links{},
-		PowerState:   powerState,
 		Actions: server.ComputerSystemV1220Actions{
 			ComputerSystemReset: server.ComputerSystemV1220Reset{
 				Target: fmt.Sprintf("/redfish/v1/Systems/%s/Actions/ComputerSystem.Reset", id),
