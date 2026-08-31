@@ -119,20 +119,6 @@ func (m *VirtualMachineResourceManager) GetComputerSystem() (ComputerSystemInter
 		return nil, fmt.Errorf("computer system not initialized")
 	}
 
-	// Update the power state just-in-time until we actually implement a control loop for it
-	vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Get(m.ctx, m.name, metav1.GetOptions{})
-	if err != nil {
-		return nil, err
-	}
-
-	switch vm.Status.Ready {
-	case true:
-		m.computerSystem.SetPowerState(server.RESOURCEPOWERSTATE_ON)
-	case false:
-		m.computerSystem.SetPowerState(server.RESOURCEPOWERSTATE_OFF)
-	}
-
 	return m.computerSystem, nil
 }
 
