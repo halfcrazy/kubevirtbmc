@@ -12,7 +12,7 @@ import (
 )
 
 // noopHAL implements hal.HAL returning nil for every sub-interface except
-// Chassis (vmChassis → ResourceManager) and Storage (in-memory FRU/SDR seed
+// Chassis (vmChassis -> ResourceManager) and Storage (in-memory FRU/SDR seed
 // for ipmitool fru list). Other sub-interfaces stay nil.
 type noopHAL struct {
 	chassis hal.ChassisHAL
