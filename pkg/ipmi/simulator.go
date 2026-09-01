@@ -217,7 +217,7 @@ func (s *Simulator) seedStorage(store *memoryStorage) {
 	fruData, err := types.PackFRU(types.FRUPackConfig{
 		Product: &types.FRUPackProduct{
 			Manufacturer: "KubeVirt",
-			Name:         "VirtualBMC",
+			Name:         "KubeVirtBMC",
 			Version:      version,
 			Serial:       serial,
 		},
@@ -239,12 +239,11 @@ func (s *Simulator) seedStorage(store *memoryStorage) {
 
 // FRUSerial builds the FRU Product Serial from VM identity.
 // Same base form as [util.SystemSerial], but truncated for the FRU type/length
-// 6-bit length field (max 63). Redfish must not use this helper.
+// 6-bit length field (max 63). Truncation keeps the namespace prefix, so VMs
+// sharing a name across namespaces stay distinguishable; falling back to the
+// bare name would not. Redfish must not use this helper.
 func FRUSerial(namespace, name string) string {
 	serial := util.SystemSerial(namespace, name)
-	if len(serial) > 63 {
-		serial = name
-	}
 	if len(serial) > 63 {
 		serial = serial[:63]
 	}

@@ -74,7 +74,7 @@ func TestBuildBMCSeedsFRU(t *testing.T) {
 	assert.NotNil(t, fru.ProductInfoArea)
 	p := fru.ProductInfoArea
 	assert.Equal(t, "KubeVirt", types.FRUFieldString(p.ManufacturerTypeLength, p.Manufacturer))
-	assert.Equal(t, "VirtualBMC", types.FRUFieldString(p.NameTypeLength, p.Name))
+	assert.Equal(t, "KubeVirtBMC", types.FRUFieldString(p.NameTypeLength, p.Name))
 	assert.Equal(t, "2.0", types.FRUFieldString(p.VersionTypeLength, p.Version))
 	assert.Equal(t, "ns/my-vm", types.FRUFieldString(p.SerialNumberTypeLength, p.SerialNumber))
 
@@ -85,7 +85,9 @@ func TestBuildBMCSeedsFRU(t *testing.T) {
 
 func TestFRUSerial(t *testing.T) {
 	assert.Equal(t, "default/vm1", FRUSerial("default", "vm1"))
-	assert.Equal(t, strings.Repeat("b", 40), FRUSerial(strings.Repeat("a", 40), strings.Repeat("b", 40)))
+	// Overlong "namespace/name" is truncated at 63 bytes, keeping the
+	// namespace prefix rather than falling back to the bare name.
+	assert.Equal(t, strings.Repeat("a", 40)+"/"+strings.Repeat("b", 22), FRUSerial(strings.Repeat("a", 40), strings.Repeat("b", 40)))
 }
 
 // TestRunDoesNotBlockCaller is a regression test: Simulator.Run must return
