@@ -65,6 +65,9 @@ func (r *VirtualMachineBMCReconciler) createVirtBMCDeployment(virtualMachineBMC 
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr.To(defaultDesiredReplicas),
+			// The agent is the sole boot-override reconciler. Recreate prevents
+			// old and new pods from mutating the same VM during a rollout.
+			Strategy: appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType},
 			Selector: &metav1.LabelSelector{
 				MatchLabels: labels,
 			},
@@ -108,6 +111,12 @@ func (r *VirtualMachineBMCReconciler) createVirtBMCDeployment(virtualMachineBMC 
 								}
 								if specIPMIEnabled(&virtualMachineBMC.Spec) {
 									args = append(args, "--enable-ipmi", "--ipmi-port", strconv.Itoa(ipmiPort))
+								}
+								// The agent reads the StorageClass from this flag at
+								// startup; a spec change re-renders the args and rolls
+								// the pod, same as the IPMI toggle above.
+								if sc := virtualMachineBMC.Spec.StorageClassName; sc != nil && *sc != "" {
+									args = append(args, "--storage-class", *sc)
 								}
 								args = append(args, virtualMachineBMC.Namespace, virtualMachineBMC.Spec.VirtualMachineRef.Name)
 								return args

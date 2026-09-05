@@ -156,6 +156,14 @@ spec:
                     - Legacy
                     - UEFI
                     type: string
+                  vmUID:
+                    description: |-
+                      VMUID scopes this state to one VirtualMachine object so a deleted VM's
+                      backup is never applied to a different VM recreated with the same name.
+                      Legacy oneshot records are migrated only when the original VMI proves
+                      ownership; ambiguous backups are preserved. Legacy persistent markers
+                      are discarded without changing the VM's persistent boot settings.
+                    type: string
                   vmiUID:
                     description: |-
                       VMIUID is the UID of the VMI generation current when a oneshot override

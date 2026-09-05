@@ -430,6 +430,16 @@ var _ = Describe("VirtualMachineBMC Controller", func() {
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
 
+			By("Recording a pending boot override")
+			bmcWithOverride := &bmcv1.VirtualMachineBMC{}
+			Expect(k8sClient.Get(ctx, bmcLookupKey, bmcWithOverride)).To(Succeed())
+			bmcWithOverride.Status.BootOverride = &bmcv1.BootOverrideStatus{
+				Mode:   bmcv1.BootOverrideModeOneshot,
+				VMUID:  string(vm.UID),
+				VMIUID: "vmi-before-delete",
+			}
+			Expect(k8sClient.Status().Update(ctx, bmcWithOverride)).To(Succeed())
+
 			By("Deleting the VirtualMachine")
 			vmToDelete := &kubevirtv1.VirtualMachine{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vmName, Namespace: testVirtualMachineBMCNamespace}, vmToDelete)).Should(Succeed())
@@ -465,6 +475,13 @@ var _ = Describe("VirtualMachineBMC Controller", func() {
 				}
 			}
 			Expect(foundCondition).To(BeTrue())
+			Eventually(func() bool {
+				var updated bmcv1.VirtualMachineBMC
+				if err := k8sClient.Get(ctx, bmcLookupKey, &updated); err != nil {
+					return false
+				}
+				return updated.Status.BootOverride == nil
+			}, timeout, interval).Should(BeTrue())
 		})
 
 		It("Should update condition and delete Deployment when Secret is deleted", func() {
@@ -562,6 +579,16 @@ var _ = Describe("VirtualMachineBMC Controller", func() {
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
 
+			By("Recording a pending boot override")
+			bmcWithOverride := &bmcv1.VirtualMachineBMC{}
+			Expect(k8sClient.Get(ctx, bmcLookupKey, bmcWithOverride)).To(Succeed())
+			bmcWithOverride.Status.BootOverride = &bmcv1.BootOverrideStatus{
+				Mode:   bmcv1.BootOverrideModeOneshot,
+				VMUID:  string(vm.UID),
+				VMIUID: "vmi-before-secret-delete",
+			}
+			Expect(k8sClient.Status().Update(ctx, bmcWithOverride)).To(Succeed())
+
 			By("Deleting the Secret")
 			secretToDelete := &corev1.Secret{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: testVirtualMachineBMCNamespace}, secretToDelete)).Should(Succeed())
@@ -596,6 +623,11 @@ var _ = Describe("VirtualMachineBMC Controller", func() {
 				err := k8sClient.Get(ctx, serviceLookupKey, svc)
 				return errors.IsNotFound(err)
 			}, timeout, interval).Should(BeTrue())
+
+			By("Keeping boot state while the VM still exists")
+			var bmc bmcv1.VirtualMachineBMC
+			Expect(k8sClient.Get(ctx, bmcLookupKey, &bmc)).To(Succeed())
+			Expect(bmc.Status.BootOverride).NotTo(BeNil())
 		})
 
 		It("Should trigger a Deployment rollout when Secret is changed", func() {

@@ -6,8 +6,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
-	cdiclient "kubevirt.io/client-go/containerizeddataimporter"
-	kvclient "kubevirt.io/client-go/kubevirt"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
@@ -29,6 +27,16 @@ type Options struct {
 	BMCPassword    string
 	EnableIPMI     bool
 	PodName        string
+	// Standalone runs without the VirtualMachineBMC CRD: no owning CR, no
+	// controller. Boot override state is kept in StateFile instead of CR
+	// status; reconciliation remains identical in both modes.
+	Standalone bool
+	// StateFile is where boot override state is persisted in standalone mode.
+	StateFile string
+	// StorageClass is the agent's --storage-class flag value, used for virtual
+	// media DataVolumes; empty falls back to the cluster default. In managed
+	// mode the controller renders the flag from the CR's spec.storageClassName.
+	StorageClass string
 }
 
 type VirtBMC struct {
@@ -38,10 +46,6 @@ type VirtBMC struct {
 	redfishPort int
 	vmNamespace string
 	vmName      string
-	bmcName     string
-
-	virtClient kvclient.Interface
-	cdiClient  cdiclient.Interface
 
 	resourceManager *resourcemanager.VirtualMachineResourceManager
 
@@ -53,15 +57,26 @@ type VirtBMC struct {
 func NewVirtBMC(ctx context.Context, options Options, inCluster bool) (*VirtBMC, error) {
 	virtClient := NewVirtClient(options)
 	cdiClient := NewCdiClient(options)
-	bmcClient := NewBMCClient(options)
 
 	vmNamespace := ctx.Value(VMNamespaceKey{}).(string)
 	vmName := ctx.Value(VMNameKey{}).(string)
-	bmcName, err := virtualMachineBMCNameFromPodLabel(ctx, bmcClient, vmNamespace, options.PodName)
-	if err != nil {
-		return nil, err
+
+	var store resourcemanager.StateStore
+	if options.Standalone {
+		var err error
+		store, err = resourcemanager.NewFileStateStore(options.StateFile)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		bmcClient := NewBMCClient(options)
+		bmcName, err := virtualMachineBMCNameFromPodLabel(ctx, bmcClient, vmNamespace, options.PodName)
+		if err != nil {
+			return nil, err
+		}
+		store = resourcemanager.NewClusterStateStore(bmcClient, vmNamespace, bmcName)
 	}
-	resourceManager := resourcemanager.NewVirtualMachineResourceManager(virtClient, cdiClient, bmcClient, bmcName)
+	resourceManager := resourcemanager.NewVirtualMachineResourceManager(virtClient, cdiClient, store, options.StorageClass)
 
 	var ipmiSimulator *ipmi.Simulator
 	if options.EnableIPMI {
@@ -75,9 +90,6 @@ func NewVirtBMC(ctx context.Context, options Options, inCluster bool) (*VirtBMC,
 		redfishPort:     options.RedfishPort,
 		vmNamespace:     vmNamespace,
 		vmName:          vmName,
-		bmcName:         bmcName,
-		virtClient:      virtClient,
-		cdiClient:       cdiClient,
 		resourceManager: resourceManager,
 		ipmiSimulator:   ipmiSimulator,
 		redfishEmulator: redfish.NewEmulator(ctx, options.RedfishPort, options.BMCUser, options.BMCPassword, resourceManager),
@@ -110,6 +122,11 @@ func (b *VirtBMC) Run() error {
 		return fmt.Errorf("unable to initialize the resource manager: %v", err)
 	}
 
+	activeBootOverride, err := b.resourceManager.ReconcileBootOverride(b.context)
+	if err != nil {
+		return fmt.Errorf("unable to reconcile boot override: %v", err)
+	}
+
 	// Start the IPMI simulator
 	if b.ipmiSimulator != nil {
 		if err := b.ipmiSimulator.Run(); err != nil {
@@ -123,6 +140,8 @@ func (b *VirtBMC) Run() error {
 		return fmt.Errorf("unable to run the redfish emulator: %v", err)
 	}
 	logrus.Infof("Redfish service listens on %s:%d", b.address, b.redfishPort)
+
+	go b.runBootOverrideReconcile(activeBootOverride)
 
 	<-b.context.Done()
 	logrus.Info("Gracefully shutting down the VirtBMC agent...")
