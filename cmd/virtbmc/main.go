@@ -62,6 +62,22 @@ func main() {
 				Usage: "log level (panic|fatal|error|warn|info|debug|trace)",
 			},
 			&cli.BoolFlag{
+				Name:        "standalone",
+				Value:       false,
+				Usage:       "run without the VirtualMachineBMC CRD (no controller needed); boot override state is kept in a local file",
+				Destination: &options.Standalone,
+			},
+			&cli.StringFlag{
+				Name:        "state-file",
+				Usage:       "standalone mode: persist boot override state in `FILE` (default \"./<ns>_<vm>.json\")",
+				Destination: &options.StateFile,
+			},
+			&cli.StringFlag{
+				Name:        "storage-class",
+				Usage:       "StorageClass for virtual media DataVolumes (default: cluster default)",
+				Destination: &options.StorageClass,
+			},
+			&cli.BoolFlag{
 				Name:    "version",
 				Aliases: []string{"v"},
 				Usage:   "print the version",
@@ -89,8 +105,14 @@ func main() {
 				panic("BMC credentials missing: both BMC_USERNAME and BMC_PASSWORD must be provided")
 			}
 
-			ctx := context.WithValue(cCtx.Context, virtbmc.VMNamespaceKey{}, cCtx.Args().Get(0))
-			ctx = context.WithValue(ctx, virtbmc.VMNameKey{}, cCtx.Args().Get(1))
+			vmNamespace := cCtx.Args().Get(0)
+			vmName := cCtx.Args().Get(1)
+			if options.Standalone && options.StateFile == "" {
+				options.StateFile = defaultStateFilePath(vmNamespace, vmName)
+			}
+
+			ctx := context.WithValue(cCtx.Context, virtbmc.VMNamespaceKey{}, vmNamespace)
+			ctx = context.WithValue(ctx, virtbmc.VMNameKey{}, vmName)
 			options.PodName = os.Getenv("POD_NAME")
 			return run(ctx, options)
 		},
@@ -99,6 +121,10 @@ func main() {
 	if err := app.Run(os.Args); err != nil {
 		logrus.Fatal(err)
 	}
+}
+
+func defaultStateFilePath(vmNamespace, vmName string) string {
+	return vmNamespace + "_" + vmName + ".json"
 }
 
 func run(ctx context.Context, options virtbmc.Options) error {

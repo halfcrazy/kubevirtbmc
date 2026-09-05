@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	kvclient "kubevirt.io/client-go/kubevirt"
@@ -73,6 +74,15 @@ func ensureAgentTestEnv(ctx context.Context, namespace string, k8sClient client.
 
 	if err := env.ensureVMExists(ctx, k8sClient, namespace); err != nil {
 		return nil, err
+	}
+
+	// Standalone mode has no Secret/VirtualMachineBMC; credentials are passed
+	// to the agent as environment variables and the test owns the Deployment.
+	if standaloneMode {
+		env.Username = standaloneUsername
+		env.Password = standalonePassword
+		waitForAgentDeploymentReady(ctx, k8sClient, namespace, agentDeploymentName)
+		return env, nil
 	}
 
 	if err := env.ensureSecretExists(ctx, k8sClient, namespace); err != nil {
@@ -211,8 +221,16 @@ func verifyVMBootOrder(ctx context.Context, k8sClient client.Client, namespace s
 }
 
 // resetBootState clears all bootOrder fields and firmware from the test VM
-// and clears status.bootOverride, so each boot test starts from a clean slate.
+// and clears the recorded boot override, so each boot test starts from a
+// clean slate.
 func resetBootState(ctx context.Context, k8sClient client.Client, namespace string) {
+	// Standalone: clear the override through the Redfish protocol first, so
+	// ClearBootOverrides can't restore backed-up boot orders after the VM
+	// cleanup below removed them.
+	if standaloneMode {
+		clearStandaloneBootOverride(ctx, namespace)
+	}
+
 	vm := &kubevirtv1.VirtualMachine{}
 	if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: agentVMName}, vm); err != nil {
 		return
@@ -266,6 +284,12 @@ func resetBootState(ctx context.Context, k8sClient client.Client, namespace stri
 	if len(vmPatch) > 0 {
 		patchJSON, _ := json.Marshal(vmPatch)
 		_ = k8sClient.Patch(ctx, vm, client.RawPatch(types.JSONPatchType, patchJSON))
+	}
+
+	// Standalone state was already cleared through the protocol above; there
+	// is no VirtualMachineBMC CR to reset.
+	if standaloneMode {
+		return
 	}
 
 	bmc := &bmcv1.VirtualMachineBMC{}
@@ -449,9 +473,14 @@ func verifyVMFirmware(ctx context.Context, k8sClient client.Client, namespace st
 		"VM %s/%s firmware should be EFI=%v", namespace, agentVMName, expectEFI)
 }
 
-// verifyBMCBootOverride checks whether status.bootOverride exists or not on
-// the VirtualMachineBMC CR.
+// verifyBMCBootOverride checks whether a boot override is recorded — on
+// status.bootOverride of the VirtualMachineBMC CR, or through the IPMI
+// protocol in standalone mode (where the state lives in the agent's file).
 func verifyBMCBootOverride(ctx context.Context, k8sClient client.Client, namespace string, shouldExist bool) {
+	if standaloneMode {
+		verifyStandaloneBootOverride(ctx, namespace, shouldExist)
+		return
+	}
 	Eventually(func() bool {
 		bmc := &bmcv1.VirtualMachineBMC{}
 		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: agentBMCName}, bmc); err != nil {
@@ -466,6 +495,10 @@ func verifyBMCBootOverride(ctx context.Context, k8sClient client.Client, namespa
 // expected persistence mode. A presence-only check cannot catch a mis-parsed
 // persist bit: the override is still written, just with the wrong mode.
 func verifyBMCBootOverrideMode(ctx context.Context, k8sClient client.Client, namespace string, mode bmcv1.BootOverrideMode) {
+	if standaloneMode {
+		verifyStandaloneBootOverrideMode(ctx, namespace, mode)
+		return
+	}
 	Eventually(func() bmcv1.BootOverrideMode {
 		bmc := &bmcv1.VirtualMachineBMC{}
 		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: agentBMCName}, bmc); err != nil {
@@ -520,10 +553,36 @@ func waitForAgentDeploymentReady(ctx context.Context, k8sClient client.Client, n
 			return false
 		}
 
-		return deployment.Status.UpdatedReplicas >= desiredReplicas &&
-			deployment.Status.ReadyReplicas >= desiredReplicas &&
-			deployment.Status.AvailableReplicas >= desiredReplicas
+		// Exact counts, not >=: with the default RollingUpdate surge, the old
+		// and new pods are briefly both Ready and both in the Service
+		// endpoints. Returning on >= would let a following request hit the old
+		// pod (e.g. stale --storage-class args).
+		return deployment.Status.UpdatedReplicas == desiredReplicas &&
+			deployment.Status.ReadyReplicas == desiredReplicas &&
+			deployment.Status.AvailableReplicas == desiredReplicas
 	}, agentTestTimeout, agentTestInterval).Should(BeTrue(), "agent deployment %q should become ready", deploymentName)
+}
+
+// waitForAgentArgs waits until the controller has rendered the given args into
+// the agent Deployment's pod template and rolled out the new pod. The args
+// check must come first: the old ReplicaSet stays Ready until the updated spec
+// lands, so a readiness-only wait can return before the change is applied.
+func waitForAgentArgs(ctx context.Context, k8sClient client.Client, namespace, deploymentName string, want ...string) {
+	Eventually(func() bool {
+		var deployment appsv1.Deployment
+		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: deploymentName}, &deployment); err != nil {
+			return false
+		}
+		args := deployment.Spec.Template.Spec.Containers[0].Args
+		for _, w := range want {
+			if !slices.Contains(args, w) {
+				return false
+			}
+		}
+		return deployment.Status.ObservedGeneration >= deployment.Generation
+	}, agentTestTimeout, agentTestInterval).Should(BeTrue(),
+		"agent deployment %q should render args %v", deploymentName, want)
+	waitForAgentDeploymentReady(ctx, k8sClient, namespace, deploymentName)
 }
 
 func verifyDataVolumeExists(ctx context.Context, k8sClient client.Client, namespace, name string) {
