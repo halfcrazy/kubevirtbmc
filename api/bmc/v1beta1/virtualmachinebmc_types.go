@@ -31,6 +31,9 @@ const (
 	VMNameLabel                      = "kubevirt.io/vm-name"
 )
 
+// AnnotationDataVolumeSizeMargin pads the inserted-media DataVolume's size by this many percent; absent/invalid defaults to 0.
+const AnnotationDataVolumeSizeMargin = "bmc.kubevirt.io/datavolume-size-margin"
+
 // VirtualMachineBMCSpec defines the desired state of VirtualMachineBMC.
 type VirtualMachineBMCSpec struct {
 	// BMC Service configuration
@@ -52,6 +55,44 @@ type VirtualMachineBMCSpec struct {
 	// StorageClassName is the StorageClass for the DataVolume created on virtual media insert; unset falls back to the cluster default.
 	// +optional
 	StorageClassName *string `json:"storageClassName,omitempty"`
+
+	// Redfish configures Redfish-specific behavior.
+	// +optional
+	Redfish *RedfishSpec `json:"redfish,omitempty"`
+}
+
+// VirtualMediaVolumeMode returns the configured volume mode for the DataVolume
+// created on virtual media insert, or nil if unset at any level.
+func (s VirtualMachineBMCSpec) VirtualMediaVolumeMode() *corev1.PersistentVolumeMode {
+	if s.Redfish == nil || s.Redfish.VirtualMedia == nil || s.Redfish.VirtualMedia.Storage == nil {
+		return nil
+	}
+	return s.Redfish.VirtualMedia.Storage.VolumeMode
+}
+
+// RedfishSpec configures Redfish-specific behavior.
+type RedfishSpec struct {
+	// VirtualMedia configures the DataVolume created on virtual media insert.
+	// +optional
+	VirtualMedia *VirtualMediaSpec `json:"virtualMedia,omitempty"`
+}
+
+// VirtualMediaSpec configures virtual media insertion.
+type VirtualMediaSpec struct {
+	// Storage configures the storage backing the DataVolume.
+	// +optional
+	Storage *VirtualMediaStorageSpec `json:"storage,omitempty"`
+}
+
+// VirtualMediaStorageSpec configures the DataVolume's storage.
+type VirtualMediaStorageSpec struct {
+	// VolumeMode is the volume mode for the DataVolume created on virtual media insert; unset keeps
+	// today's behavior (Filesystem, CDI's own default). Block requests a raw block device instead,
+	// which has no filesystem overhead and so isn't subject to the StorageClass's CDI
+	// filesystemOverhead setting — useful when that setting can't accommodate an exact-size image.
+	// +optional
+	// +kubebuilder:validation:Enum=Filesystem;Block
+	VolumeMode *corev1.PersistentVolumeMode `json:"volumeMode,omitempty"`
 }
 
 // Service configuration for the BMC service.

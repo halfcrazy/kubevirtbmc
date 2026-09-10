@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/sirupsen/logrus"
-
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -221,8 +222,13 @@ func (m *VirtualMachineResourceManager) InsertMedia(ctx context.Context, imageUR
 		return err
 	}
 
-	// A missing BMC client/object means no StorageClassName override is configured, not a failure.
-	var storageClassName string
+	// A missing BMC client/object means no StorageClassName/VolumeMode/size-margin override is
+	// configured, not a failure.
+	var (
+		storageClassName  string
+		volumeMode        *corev1.PersistentVolumeMode
+		sizeMarginPercent int
+	)
 
 	if m.bmcClient != nil {
 		var bmc bmcv1.VirtualMachineBMC
@@ -230,13 +236,33 @@ func (m *VirtualMachineResourceManager) InsertMedia(ctx context.Context, imageUR
 			if !apierrors.IsNotFound(err) {
 				return err
 			}
-		} else if bmc.Spec.StorageClassName != nil {
-			storageClassName = *bmc.Spec.StorageClassName
+		} else {
+			if bmc.Spec.StorageClassName != nil {
+				storageClassName = *bmc.Spec.StorageClassName
+			}
+			volumeMode = bmc.Spec.VirtualMediaVolumeMode()
+			if margin, ok := bmc.Annotations[bmcv1.AnnotationDataVolumeSizeMargin]; ok {
+				parsed, err := strconv.Atoi(margin)
+				if err != nil {
+					accesslog.Logger(ctx).WithError(err).Warnf("invalid %s annotation %q on BMC %s, defaulting to 0", bmcv1.AnnotationDataVolumeSizeMargin, margin, m.bmcName)
+				} else {
+					sizeMarginPercent = parsed
+				}
+			}
 		}
 	}
 
+	imageSize = util.WithImportMargin(imageSize, sizeMarginPercent)
+
 	// Create DataVolume
-	dv := util.ConstructDataVolume(m.namespace, m.name, imageURL, imageSize, storageClassName)
+	dv := util.ConstructDataVolume(util.DataVolumeOptions{
+		Namespace:        m.namespace,
+		Name:             m.name,
+		URL:              imageURL,
+		Size:             imageSize,
+		StorageClassName: storageClassName,
+		VolumeMode:       volumeMode,
+	})
 	_, err = m.cdiClient.CdiV1beta1().DataVolumes(m.namespace).Create(ctx, dv, metav1.CreateOptions{})
 	if err != nil {
 		return err

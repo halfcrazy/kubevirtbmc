@@ -11,6 +11,7 @@ import (
 	"github.com/sirupsen/logrus"
 	logrustest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
@@ -359,6 +360,119 @@ func TestVirtualMachineResourceManager_InsertMedia(t *testing.T) {
 				WithHTTPSource(imageURL).
 				WithStorage(testImageSizeBytes).
 				WithStorageClass("custom-storage-class").
+				WithAnnotation("cdi.kubevirt.io/storage.bind.immediate.requested", "").Build(),
+			expectedVM: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
+				WithTemplate().
+				WithCDRomDisk("cdrom", nil).
+				WithVolumes(kubevirtv1.Volume{
+					Name: "cdrom",
+					VolumeSource: kubevirtv1.VolumeSource{
+						DataVolume: &kubevirtv1.DataVolumeSource{
+							Name:         testVMName,
+							Hotpluggable: true,
+						},
+					},
+				}).Build(),
+			shouldError: false,
+		},
+		{
+			name:         "Insert media with a VirtualMachineBMC.Spec.Redfish.VirtualMedia.Storage.VolumeMode set should use that VolumeMode",
+			imageURL:     imageURL,
+			virtualMedia: &fakeVirtualMedia{},
+			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
+				WithTemplate().
+				WithCDRomDisk("cdrom", nil).Build(),
+			bmc: func() *bmcv1.VirtualMachineBMC {
+				bmc := newTestBMC()
+				bmc.Spec.Redfish = &bmcv1.RedfishSpec{
+					VirtualMedia: &bmcv1.VirtualMediaSpec{
+						Storage: &bmcv1.VirtualMediaStorageSpec{
+							VolumeMode: util.Ptr(corev1.PersistentVolumeBlock),
+						},
+					},
+				}
+				return bmc
+			}(),
+			expectedVirtualMedia: &fakeVirtualMedia{
+				called:   true,
+				imageURL: imageURL,
+				inserted: true,
+			},
+			expectedDV: builder.NewDataVolumeBuilder(testNamespace, testVMName).
+				WithHTTPSource(imageURL).
+				WithStorage(testImageSizeBytes).
+				WithAccessModes(corev1.ReadWriteOnce).
+				WithVolumeMode(corev1.PersistentVolumeBlock).
+				WithAnnotation("cdi.kubevirt.io/storage.bind.immediate.requested", "").Build(),
+			expectedVM: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
+				WithTemplate().
+				WithCDRomDisk("cdrom", nil).
+				WithVolumes(kubevirtv1.Volume{
+					Name: "cdrom",
+					VolumeSource: kubevirtv1.VolumeSource{
+						DataVolume: &kubevirtv1.DataVolumeSource{
+							Name:         testVMName,
+							Hotpluggable: true,
+						},
+					},
+				}).Build(),
+			shouldError: false,
+		},
+		{
+			name:         "Insert media with the datavolume-size-margin annotation set should pad the requested size",
+			imageURL:     imageURL,
+			virtualMedia: &fakeVirtualMedia{},
+			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
+				WithTemplate().
+				WithCDRomDisk("cdrom", nil).Build(),
+			bmc: func() *bmcv1.VirtualMachineBMC {
+				bmc := newTestBMC()
+				bmc.Annotations = map[string]string{bmcv1.AnnotationDataVolumeSizeMargin: "30"}
+				return bmc
+			}(),
+			expectedVirtualMedia: &fakeVirtualMedia{
+				called:   true,
+				imageURL: imageURL,
+				inserted: true,
+			},
+			expectedDV: builder.NewDataVolumeBuilder(testNamespace, testVMName).
+				WithHTTPSource(imageURL).
+				WithStorage(util.WithImportMargin(testImageSizeBytes, 30)).
+				WithAnnotation("cdi.kubevirt.io/storage.bind.immediate.requested", "").Build(),
+			expectedVM: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
+				WithTemplate().
+				WithCDRomDisk("cdrom", nil).
+				WithVolumes(kubevirtv1.Volume{
+					Name: "cdrom",
+					VolumeSource: kubevirtv1.VolumeSource{
+						DataVolume: &kubevirtv1.DataVolumeSource{
+							Name:         testVMName,
+							Hotpluggable: true,
+						},
+					},
+				}).Build(),
+			shouldError: false,
+		},
+		{
+			name:         "Insert media with an invalid datavolume-size-margin annotation should default to no padding",
+			imageURL:     imageURL,
+			virtualMedia: &fakeVirtualMedia{},
+			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
+				WithTemplate().
+				WithCDRomDisk("cdrom", nil).Build(),
+			bmc: func() *bmcv1.VirtualMachineBMC {
+				bmc := newTestBMC()
+				bmc.Annotations = map[string]string{bmcv1.AnnotationDataVolumeSizeMargin: "not-a-number"}
+				return bmc
+			}(),
+			expectedVirtualMedia: &fakeVirtualMedia{
+				called:   true,
+				imageURL: imageURL,
+				inserted: true,
+			},
+			expectedDV: builder.NewDataVolumeBuilder(testNamespace, testVMName).
+				WithHTTPSource(imageURL).
+				WithStorage(testImageSizeBytes).
 				WithAnnotation("cdi.kubevirt.io/storage.bind.immediate.requested", "").Build(),
 			expectedVM: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
 				WithTemplate().

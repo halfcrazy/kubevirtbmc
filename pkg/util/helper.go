@@ -17,6 +17,14 @@ import (
 // immediate binding of the underlying PVC, bypassing WaitForFirstConsumer.
 const AnnStorageBindImmediateRequested = "cdi.kubevirt.io/storage.bind.immediate.requested"
 
+// WithImportMargin pads size by marginPercent; marginPercent <= 0 is a no-op.
+func WithImportMargin(size int64, marginPercent int) int64 {
+	if marginPercent <= 0 {
+		return size
+	}
+	return size + size*int64(marginPercent)/100
+}
+
 func Ptr[T any](value T) *T {
 	return &value
 }
@@ -53,24 +61,41 @@ func GetRemoteFileSize(url string) (int64, error) {
 	return size, nil
 }
 
-// ConstructDataVolume builds the DataVolume backing an inserted virtual media image; an empty storageClassName falls back to the cluster default.
-func ConstructDataVolume(namespace, name, url string, size int64, storageClassName string) *cdiv1.DataVolume {
+// DataVolumeOptions holds the inputs for ConstructDataVolume.
+type DataVolumeOptions struct {
+	Namespace string
+	Name      string
+	URL       string
+	Size      int64
+	// StorageClassName falls back to the cluster default when empty.
+	StorageClassName string
+	// VolumeMode falls back to CDI's own default (Filesystem) when nil.
+	VolumeMode *corev1.PersistentVolumeMode
+}
+
+// ConstructDataVolume builds the DataVolume backing an inserted virtual media image.
+func ConstructDataVolume(params DataVolumeOptions) *cdiv1.DataVolume {
 	storage := &cdiv1.StorageSpec{
+		VolumeMode: params.VolumeMode,
 		Resources: corev1.VolumeResourceRequirements{
 			Requests: corev1.ResourceList{
-				corev1.ResourceStorage: *resource.NewQuantity(size, resource.BinarySI),
+				corev1.ResourceStorage: *resource.NewQuantity(params.Size, resource.BinarySI),
 			},
 		},
 	}
 
-	if storageClassName != "" {
-		storage.StorageClassName = &storageClassName
+	if params.VolumeMode != nil {
+		storage.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+	}
+
+	if params.StorageClassName != "" {
+		storage.StorageClassName = &params.StorageClassName
 	}
 
 	return &cdiv1.DataVolume{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: namespace,
-			Name:      name,
+			Namespace: params.Namespace,
+			Name:      params.Name,
 			Annotations: map[string]string{
 				AnnStorageBindImmediateRequested: "",
 			},
@@ -78,7 +103,7 @@ func ConstructDataVolume(namespace, name, url string, size int64, storageClassNa
 		Spec: cdiv1.DataVolumeSpec{
 			Source: &cdiv1.DataVolumeSource{
 				HTTP: &cdiv1.DataVolumeSourceHTTP{
-					URL: url,
+					URL: params.URL,
 				},
 			},
 			Storage: storage,
