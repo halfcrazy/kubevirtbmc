@@ -14,7 +14,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
-	"kubevirt.io/kubevirtbmc/pkg/ipmi"
 	"kubevirt.io/kubevirtbmc/pkg/util"
 	testutil "kubevirt.io/kubevirtbmc/test/util"
 )
@@ -745,6 +744,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 		})
 
 		It("should return FRU inventory via fru list", func() {
+			_, expectedSerial := vmSystemIdentity(ctx, k8sClient, ns)
 			out, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("fru", "list"))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(out).To(And(
@@ -752,25 +752,27 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				ContainSubstring("Product Manufacturer"),
 				ContainSubstring("KubeVirt"),
 				ContainSubstring("Product Name"),
-				ContainSubstring("KubeVirtBMC"),
-				ContainSubstring("Product Version"),
+				ContainSubstring(util.SystemName(agentNamespace, agentVMName)),
 				ContainSubstring("Product Serial"),
-				ContainSubstring(ipmi.FRUSerial(agentNamespace, agentVMName)),
+				ContainSubstring(expectedSerial),
 			))
+			// Product Version is empty by design: ipmitool omits empty FRU fields.
+			Expect(out).NotTo(ContainSubstring("Product Version"))
 		})
 
 		It("should return FRU inventory via fru print 0", func() {
+			_, expectedSerial := vmSystemIdentity(ctx, k8sClient, ns)
 			out, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("fru", "print", "0"))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(out).To(And(
 				ContainSubstring("Product Manufacturer"),
 				ContainSubstring("KubeVirt"),
 				ContainSubstring("Product Name"),
-				ContainSubstring("KubeVirtBMC"),
-				ContainSubstring("Product Version"),
+				ContainSubstring(util.SystemName(agentNamespace, agentVMName)),
 				ContainSubstring("Product Serial"),
-				ContainSubstring(ipmi.FRUSerial(agentNamespace, agentVMName)),
+				ContainSubstring(expectedSerial),
 			))
+			Expect(out).NotTo(ContainSubstring("Product Version"))
 		})
 	})
 
@@ -823,12 +825,13 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				Expect(out).To(ContainSubstring("Managers"))
 			})
 
-			It("should return system identity with namespace/name serial", func() {
-				serial := util.SystemSerial(agentNamespace, agentVMName)
+			It("should report the VM's SMBIOS identity", func() {
+				systemUUID, serial := vmSystemIdentity(ctx, k8sClient, ns)
 				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("GET", "/Systems/1", ""))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(And(
-					ContainSubstring(`"Name":"`+serial+`"`),
+					ContainSubstring(`"Name":"`+util.SystemName(agentNamespace, agentVMName)+`"`),
+					ContainSubstring(`"UUID":"`+systemUUID+`"`),
 					ContainSubstring(`"SerialNumber":"`+serial+`"`),
 				))
 			})
