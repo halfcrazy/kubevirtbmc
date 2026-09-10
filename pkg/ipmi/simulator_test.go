@@ -16,7 +16,7 @@ import (
 )
 
 func TestBuildBMCRegistersUser(t *testing.T) {
-	s := NewSimulator("127.0.0.1", 623, nil, "admin", "secret", "default/testvm", "1.0")
+	s := NewSimulator("127.0.0.1", 623, nil, "admin", "secret", "default/testvm")
 
 	b := s.buildBMC()
 
@@ -29,7 +29,7 @@ func TestBuildBMCRegistersUser(t *testing.T) {
 }
 
 func TestBuildBMCNoUserWhenUsernameEmpty(t *testing.T) {
-	s := NewSimulator("127.0.0.1", 623, nil, "", "", "default/testvm", "")
+	s := NewSimulator("127.0.0.1", 623, nil, "", "", "default/testvm")
 
 	b := s.buildBMC()
 
@@ -47,8 +47,9 @@ func TestBuildBMCNoUserWhenUsernameEmpty(t *testing.T) {
 func TestBuildBMCHALExposesChassis(t *testing.T) {
 	rm := resourcemanager.NewMockResourceManager(gomock.NewController(t))
 	rm.EXPECT().GetSystemUUID(gomock.Any()).Return("00000000-0000-0000-0000-000000000000", nil)
+	rm.EXPECT().GetSystemSerial(gomock.Any()).Return("default/testvm", nil)
 	rm.EXPECT().GetPowerStatus(gomock.Any()).Return(true, nil)
-	s := NewSimulator("127.0.0.1", 623, rm, "admin", "secret", "default/testvm", "1.0")
+	s := NewSimulator("127.0.0.1", 623, rm, "admin", "secret", "default/testvm")
 
 	b := s.buildBMC()
 	ch := b.HAL().Chassis()
@@ -60,7 +61,10 @@ func TestBuildBMCHALExposesChassis(t *testing.T) {
 }
 
 func TestBuildBMCSeedsFRU(t *testing.T) {
-	s := NewSimulator("127.0.0.1", 623, nil, "admin", "secret", "ns/my-vm", "2.0")
+	rm := resourcemanager.NewMockResourceManager(gomock.NewController(t))
+	rm.EXPECT().GetSystemUUID(gomock.Any()).Return("5d307ca9-b3ef-428c-8861-06e72d69f223", nil)
+	rm.EXPECT().GetSystemSerial(gomock.Any()).Return("e4686d2c-6e8d-4335-b8fd-81bee22f4815", nil)
+	s := NewSimulator("127.0.0.1", 623, rm, "admin", "secret", "ns/my-vm")
 	b := s.buildBMC()
 
 	store := b.HAL().Storage()
@@ -73,21 +77,35 @@ func TestBuildBMCSeedsFRU(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, fru.ProductInfoArea)
 	p := fru.ProductInfoArea
-	assert.Equal(t, "KubeVirt", types.FRUFieldString(p.ManufacturerTypeLength, p.Manufacturer))
-	assert.Equal(t, "KubeVirtBMC", types.FRUFieldString(p.NameTypeLength, p.Name))
-	assert.Equal(t, "2.0", types.FRUFieldString(p.VersionTypeLength, p.Version))
-	assert.Equal(t, "ns/my-vm", types.FRUFieldString(p.SerialNumberTypeLength, p.SerialNumber))
+	assert.Equal(t, "KubeVirt", types.FRUFieldString(p.ManufacturerTypeLength, p.Manufacturer), "Product Manufacturer")
+	assert.Equal(t, "ns/my-vm", types.FRUFieldString(p.NameTypeLength, p.Name), "Product Name is the managed VM")
+	assert.Equal(t, "e4686d2c-6e8d-4335-b8fd-81bee22f4815", types.FRUFieldString(p.SerialNumberTypeLength, p.SerialNumber), "Product Serial is the VM's SMBIOS serial")
+	// Product Version is deliberately left empty: the Product Info Area
+	// describes the managed system, and a VM has no product version.
+	assert.Equal(t, "", types.FRUFieldString(p.VersionTypeLength, p.Version), "Product Version stays empty")
 
 	ids, err := store.SDR().RecordIDs(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, []uint16{1}, ids)
 }
 
-func TestFRUSerial(t *testing.T) {
-	assert.Equal(t, "default/vm1", FRUSerial("default", "vm1"))
-	// Overlong "namespace/name" is truncated at 63 bytes, keeping the
-	// namespace prefix rather than falling back to the bare name.
-	assert.Equal(t, strings.Repeat("a", 40)+"/"+strings.Repeat("b", 22), FRUSerial(strings.Repeat("a", 40), strings.Repeat("b", 40)))
+// TestSeedStorageTruncatesFRUFields covers the FRU type/length byte's 6-bit
+// length: values over 63 bytes must be clipped, because an overflowing length
+// collides with the type code and corrupts the rest of the area.
+func TestSeedStorageTruncatesFRUFields(t *testing.T) {
+	rm := resourcemanager.NewMockResourceManager(gomock.NewController(t))
+	rm.EXPECT().GetSystemUUID(gomock.Any()).Return("5d307ca9-b3ef-428c-8861-06e72d69f223", nil)
+	rm.EXPECT().GetSystemSerial(gomock.Any()).Return(strings.Repeat("b", 70), nil)
+	s := NewSimulator("127.0.0.1", 623, rm, "admin", "secret", strings.Repeat("a", 70))
+	b := s.buildBMC()
+
+	raw, err := b.HAL().Storage().FRU().Read(context.Background(), 0)
+	assert.NoError(t, err)
+	fru, err := types.ParseFRU(raw)
+	assert.NoError(t, err)
+	p := fru.ProductInfoArea
+	assert.Equal(t, strings.Repeat("a", 63), types.FRUFieldString(p.NameTypeLength, p.Name))
+	assert.Equal(t, strings.Repeat("b", 63), types.FRUFieldString(p.SerialNumberTypeLength, p.SerialNumber))
 }
 
 // TestRunDoesNotBlockCaller is a regression test: Simulator.Run must return
@@ -96,7 +114,7 @@ func TestFRUSerial(t *testing.T) {
 // Stop must wait for that goroutine to exit.
 func TestRunDoesNotBlockCaller(t *testing.T) {
 	// Bind to an ephemeral port on loopback so concurrent test runs don't clash.
-	s := NewSimulator("127.0.0.1", 0, nil, "admin", "secret", "default/testvm", "1.0")
+	s := NewSimulator("127.0.0.1", 0, nil, "admin", "secret", "default/testvm")
 
 	done := make(chan error, 1)
 	go func() { done <- s.Run() }()

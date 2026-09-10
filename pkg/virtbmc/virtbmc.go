@@ -14,6 +14,7 @@ import (
 	"kubevirt.io/kubevirtbmc/pkg/ipmi"
 	"kubevirt.io/kubevirtbmc/pkg/redfish"
 	"kubevirt.io/kubevirtbmc/pkg/resourcemanager"
+	"kubevirt.io/kubevirtbmc/pkg/util"
 )
 
 type VMNameKey struct{}
@@ -69,7 +70,7 @@ func NewVirtBMC(ctx context.Context, options Options, inCluster bool) (*VirtBMC,
 		ipmiSimulator = ipmi.NewSimulator(
 			options.Address, options.IPMIPort, resourceManager,
 			options.BMCUser, options.BMCPassword,
-			ipmi.FRUSerial(vmNamespace, vmName), options.GitCommit,
+			util.SystemName(vmNamespace, vmName),
 		)
 	}
 
