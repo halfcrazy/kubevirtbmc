@@ -23,7 +23,7 @@ import (
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	cdifake "kubevirt.io/client-go/containerizeddataimporter/fake"
 	kvfake "kubevirt.io/client-go/kubevirt/fake"
-	crffake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
 	"kubevirt.io/kubevirtbmc/pkg/redfish"
@@ -73,7 +73,7 @@ func newResourceManager(ctx context.Context) (*resourcemanager.VirtualMachineRes
 
 	virtClient := kvfake.NewSimpleClientset(vm)
 	cdiClient := cdifake.NewSimpleClientset()
-	bmcClient := crffake.NewClientBuilder().WithScheme(scheme).WithObjects(bmc).Build()
+	bmcClient := crfake.NewClientBuilder().WithScheme(scheme).WithObjects(bmc).Build()
 
 	rm := resourcemanager.NewVirtualMachineResourceManager(virtClient, cdiClient, bmcClient, vmName)
 	if err := rm.Initialize(ctx, namespace, vmName); err != nil {

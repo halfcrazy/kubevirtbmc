@@ -101,7 +101,7 @@ def main():
         print("\n".join(f"- `{e}`" for e in introduced) or "- none", end="\n\n")
 
     if os.environ.get("GITHUB_ACTIONS"):
-        print("Full detail: see the uploaded `redfish-interop-logs` artifact "
+        print("Full detail: see the uploaded `redfish-interop-ironic-logs` artifact "
               "(InteropHtmlLog per run).")
     else:
         print(f"Full detail: InteropHtmlLog under `{args.head_dir}`.")
