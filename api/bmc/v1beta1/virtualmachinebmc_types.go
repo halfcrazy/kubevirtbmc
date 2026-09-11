@@ -75,9 +75,19 @@ func (s VirtualMachineBMCSpec) VirtualMediaVolumeMode() *corev1.PersistentVolume
 	return s.Redfish.VirtualMedia.Storage.VolumeMode
 }
 
+// RedfishVirtualMediaTLS returns the configured TLS behavior for fetching virtual
+// media images over https, or nil if unset at any level.
+func (s VirtualMachineBMCSpec) RedfishVirtualMediaTLS() *VirtualMediaTLSSpec {
+	if s.Redfish == nil || s.Redfish.VirtualMedia == nil {
+		return nil
+	}
+	return s.Redfish.VirtualMedia.TLS
+}
+
 // RedfishSpec configures Redfish-specific behavior.
 type RedfishSpec struct {
-	// VirtualMedia configures the DataVolume created on virtual media insert.
+	// VirtualMedia configures the DataVolume created on virtual media insert and TLS behavior when
+	// fetching virtual media images over https.
 	// +optional
 	VirtualMedia *VirtualMediaSpec `json:"virtualMedia,omitempty"`
 }
@@ -87,6 +97,22 @@ type VirtualMediaSpec struct {
 	// Storage configures the storage backing the DataVolume.
 	// +optional
 	Storage *VirtualMediaStorageSpec `json:"storage,omitempty"`
+
+	// TLS configures TLS behavior when fetching virtual media images over https.
+	// +optional
+	TLS *VirtualMediaTLSSpec `json:"tls,omitempty"`
+}
+
+// VirtualMediaTLSSpec configures TLS behavior when fetching virtual media images over https.
+type VirtualMediaTLSSpec struct {
+	// InsecureSkipVerify disables TLS certificate verification when fetching a virtual media image over https.
+	// +optional
+	InsecureSkipVerify *bool `json:"insecureSkipVerify,omitempty"`
+
+	// CABundleConfigMapRef references a ConfigMap, in the same namespace as the VirtualMachineBMC, containing a
+	// CA bundle (key "ca.pem") trusted when fetching a virtual media image over https.
+	// +optional
+	CABundleConfigMapRef *corev1.LocalObjectReference `json:"caBundleConfigMapRef,omitempty"`
 }
 
 // VirtualMediaStorageSpec configures the DataVolume's storage.

@@ -217,51 +217,71 @@ func (m *VirtualMachineResourceManager) InsertMedia(ctx context.Context, imageUR
 		return err
 	}
 
-	imageSize, err := util.GetRemoteFileSize(imageURL)
-	if err != nil {
-		return err
-	}
-
-	// A missing BMC client/object means no StorageClassName/VolumeMode/size-margin override is
-	// configured, not a failure.
+	// A missing BMC client/object means no StorageClassName/VolumeMode/size-margin/VirtualMedia
+	// override is configured, not a failure.
 	var (
-		storageClassName  string
-		volumeMode        *corev1.PersistentVolumeMode
-		sizeMarginPercent int
+		storageClassName   string
+		volumeMode         *corev1.PersistentVolumeMode
+		sizeMarginPercent  int
+		insecureSkipVerify bool
+		caBundleConfigMap  string
 	)
 
+	var bmc bmcv1.VirtualMachineBMC
 	if m.bmcClient != nil {
-		var bmc bmcv1.VirtualMachineBMC
-		if err := m.bmcClient.Get(ctx, types.NamespacedName{Namespace: m.namespace, Name: m.bmcName}, &bmc); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return err
-			}
-		} else {
+		err := m.bmcClient.Get(ctx, types.NamespacedName{Namespace: m.namespace, Name: m.bmcName}, &bmc)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+		if err == nil {
 			if name := bmc.Spec.VirtualMediaStorageClassName(); name != nil {
 				storageClassName = *name
 			}
 			volumeMode = bmc.Spec.VirtualMediaVolumeMode()
 			if margin, ok := bmc.Annotations[bmcv1.AnnotationDataVolumeSizeMargin]; ok {
-				parsed, err := strconv.Atoi(margin)
-				if err != nil {
-					accesslog.Logger(ctx).WithError(err).Warnf("invalid %s annotation %q on BMC %s, defaulting to 0", bmcv1.AnnotationDataVolumeSizeMargin, margin, m.bmcName)
+				parsed, parseErr := strconv.Atoi(margin)
+				if parseErr != nil {
+					accesslog.Logger(ctx).WithError(parseErr).Warnf("invalid %s annotation %q on BMC %s, defaulting to 0", bmcv1.AnnotationDataVolumeSizeMargin, margin, m.bmcName)
 				} else {
 					sizeMarginPercent = parsed
+				}
+			}
+			if tls := bmc.Spec.RedfishVirtualMediaTLS(); tls != nil {
+				if tls.InsecureSkipVerify != nil {
+					insecureSkipVerify = *tls.InsecureSkipVerify
+				}
+				if tls.CABundleConfigMapRef != nil {
+					caBundleConfigMap = tls.CABundleConfigMapRef.Name
 				}
 			}
 		}
 	}
 
+	var caBundle []byte
+	if caBundleConfigMap != "" {
+		var cm corev1.ConfigMap
+		if err := m.bmcClient.Get(ctx, types.NamespacedName{Namespace: m.namespace, Name: caBundleConfigMap}, &cm); err != nil {
+			return fmt.Errorf("failed to get CA bundle ConfigMap %q: %w", caBundleConfigMap, err)
+		}
+		caBundle = []byte(cm.Data[util.CABundleConfigMapKey])
+	}
+
+	imageSize, err := util.GetRemoteFileSize(imageURL, insecureSkipVerify, caBundle)
+	if err != nil {
+		return err
+	}
 	imageSize = util.WithImportMargin(imageSize, sizeMarginPercent)
 
 	// Create DataVolume
 	dv := util.ConstructDataVolume(util.DataVolumeOptions{
-		Namespace:        m.namespace,
-		Name:             m.name,
-		URL:              imageURL,
-		Size:             imageSize,
-		StorageClassName: storageClassName,
-		VolumeMode:       volumeMode,
+		Namespace:          m.namespace,
+		Name:               m.name,
+		URL:                imageURL,
+		Size:               imageSize,
+		StorageClassName:   storageClassName,
+		VolumeMode:         volumeMode,
+		InsecureSkipVerify: insecureSkipVerify,
+		CertConfigMap:      caBundleConfigMap,
 	})
 	_, err = m.cdiClient.CdiV1beta1().DataVolumes(m.namespace).Create(ctx, dv, metav1.CreateOptions{})
 	if err != nil {

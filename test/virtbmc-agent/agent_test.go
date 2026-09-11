@@ -2,11 +2,13 @@ package virtbmcagent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -1085,6 +1087,102 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 				verifyDataVolumeExists(ctx, k8sClient, ns, agentVMName)
 				verifyDataVolumeStorageClass(ctx, k8sClient, ns, agentVMName, wantClass)
+			})
+		})
+
+		Context("Virtual Media TLS overrides", func() {
+			var (
+				imageURL           string
+				correctCAConfigMap string
+				wrongCAConfigMap   string
+			)
+
+			BeforeAll(func() {
+				By("deploying an in-cluster HTTPS server with a self-signed certificate")
+				var cleanup func()
+				imageURL, correctCAConfigMap, wrongCAConfigMap, cleanup = setupVirtualMediaTLSServer(ctx, k8sClient, ns)
+				DeferCleanup(cleanup)
+			})
+
+			setVirtualMediaTLS := func(tls *bmcv1.VirtualMediaTLSSpec) {
+				bmc := &bmcv1.VirtualMachineBMC{}
+				Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: agentBMCName}, bmc)).To(Succeed())
+				orig := bmc.DeepCopy()
+				bmc.Spec.Redfish = &bmcv1.RedfishSpec{VirtualMedia: &bmcv1.VirtualMediaSpec{TLS: tls}}
+				Expect(k8sClient.Patch(ctx, bmc, client.MergeFrom(orig))).To(Succeed())
+			}
+
+			insertMedia := func() string {
+				body := fmt.Sprintf(`{"Image":%q,"Inserted":true}`, imageURL)
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("POST", "/Managers/BMC/VirtualMedia/CD1/Actions/VirtualMedia.InsertMedia", body))
+				Expect(err).NotTo(HaveOccurred())
+				return strings.TrimSpace(out)
+			}
+
+			ejectMediaAndVerifyRemoved := func() {
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("POST", "/Managers/BMC/VirtualMedia/CD1/Actions/VirtualMedia.EjectMedia", `{}`))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(strings.TrimSpace(out)).To(SatisfyAny(ContainSubstring("200"), ContainSubstring("204")))
+				verifyDataVolumeDeleted(ctx, k8sClient, ns, agentVMName)
+			}
+
+			It("accepts the self-signed server when insecureSkipVerify is true", func() {
+				setVirtualMediaTLS(&bmcv1.VirtualMediaTLSSpec{InsecureSkipVerify: util.Ptr(true)})
+
+				Expect(insertMedia()).To(ContainSubstring("200"))
+
+				verifyDataVolumeExists(ctx, k8sClient, ns, agentVMName)
+				verifyDataVolumeInsecureSkipVerify(ctx, k8sClient, ns, agentVMName, true)
+				verifyDataVolumeSucceeded(ctx, k8sClient, ns, agentVMName)
+
+				ejectMediaAndVerifyRemoved()
+			})
+
+			It("accepts the self-signed server when caBundleConfigMapRef points to the signing CA", func() {
+				setVirtualMediaTLS(&bmcv1.VirtualMediaTLSSpec{
+					CABundleConfigMapRef: &corev1.LocalObjectReference{Name: correctCAConfigMap},
+				})
+
+				Expect(insertMedia()).To(ContainSubstring("200"))
+
+				verifyDataVolumeExists(ctx, k8sClient, ns, agentVMName)
+				verifyDataVolumeCertConfigMap(ctx, k8sClient, ns, agentVMName, correctCAConfigMap)
+				verifyDataVolumeSucceeded(ctx, k8sClient, ns, agentVMName)
+
+				ejectMediaAndVerifyRemoved()
+			})
+
+			It("rejects the self-signed server when caBundleConfigMapRef points to an unrelated CA", func() {
+				setVirtualMediaTLS(&bmcv1.VirtualMediaTLSSpec{
+					CABundleConfigMapRef: &corev1.LocalObjectReference{Name: wrongCAConfigMap},
+				})
+
+				out := insertMedia()
+				Expect(out).To(ContainSubstring("500"))
+				Expect(out).NotTo(ContainSubstring(`"200"`))
+
+				verifyDataVolumeAbsent(ctx, k8sClient, ns, agentVMName)
+			})
+
+			It("rejects when caBundleConfigMapRef points to a ConfigMap that does not exist", func() {
+				setVirtualMediaTLS(&bmcv1.VirtualMediaTLSSpec{
+					CABundleConfigMapRef: &corev1.LocalObjectReference{Name: "kubevirtbmc-e2e-nonexistent-ca-bundle"},
+				})
+
+				out := insertMedia()
+				Expect(out).To(ContainSubstring("500"))
+				Expect(out).NotTo(ContainSubstring(`"200"`))
+
+				verifyDataVolumeAbsent(ctx, k8sClient, ns, agentVMName)
+			})
+
+			It("rejects the self-signed server when no TLS override is configured", func() {
+				setVirtualMediaTLS(nil)
+
+				out := insertMedia()
+				Expect(out).To(ContainSubstring("500"))
+
+				verifyDataVolumeAbsent(ctx, k8sClient, ns, agentVMName)
 			})
 		})
 	})
