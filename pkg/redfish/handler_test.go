@@ -140,6 +140,29 @@ func TestGetSession(t *testing.T) {
 	}
 }
 
+func TestGetSessionCollection(t *testing.T) {
+	ctl := gomock.NewController(t)
+	defer ctl.Finish()
+
+	h := NewHandler(testUsername, testPassword, nil)
+
+	tokenInfo := session.NewTokenInfo("test-session-id-collection", testUsername)
+	token := session.AddToken(tokenInfo)
+	defer session.RemoveToken(token)
+
+	collection := h.GetSessionCollection()
+	assert.Equal(t, "/redfish/v1/SessionService/Sessions", collection.OdataId)
+	assert.Equal(t, int64(len(collection.Members)), collection.MembersodataCount)
+
+	found := false
+	for _, member := range collection.Members {
+		if member.OdataId == "/redfish/v1/SessionService/Sessions/test-session-id-collection" {
+			found = true
+		}
+	}
+	assert.True(t, found, "session collection should contain the added session")
+}
+
 func TestDeleteSession(t *testing.T) {
 	ctl := gomock.NewController(t)
 	defer ctl.Finish()
@@ -173,7 +196,7 @@ func TestDeleteSession(t *testing.T) {
 			}
 
 			h.DeleteSession(tc.sessionID)
-			_, exists := session.GetToken(tc.sessionID)
+			_, exists := session.GetTokenFromSessionID(tc.sessionID)
 			assert.False(t, exists)
 		})
 	}

@@ -15,6 +15,7 @@ var implementedMethods = map[string]bool{
 	"RedfishV1ManagersManagerIdVirtualMediaVirtualMediaIdActionsVirtualMediaEjectMediaPost":  true,
 	"RedfishV1ManagersManagerIdVirtualMediaVirtualMediaIdActionsVirtualMediaInsertMediaPost": true,
 	"RedfishV1ManagersManagerIdVirtualMediaVirtualMediaIdGet":                                true,
+	"RedfishV1SessionServiceSessionsGet":                                                     true,
 	"RedfishV1SessionServiceSessionsPost":                                                    true,
 	"RedfishV1SessionServiceSessionsSessionIdDelete":                                         true,
 	"RedfishV1SessionServiceSessionsSessionIdGet":                                            true,

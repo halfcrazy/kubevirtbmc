@@ -22,6 +22,7 @@ func TestBaseRouteName(t *testing.T) {
 func TestImplementedMethods(t *testing.T) {
 	for _, name := range []string{
 		"RedfishV1Get",
+		"RedfishV1SessionServiceSessionsGet",
 		"RedfishV1SessionServiceSessionsPost",
 		"RedfishV1SystemsComputerSystemIdGet",
 		"RedfishV1SystemsComputerSystemIdActionsComputerSystemResetPost",
