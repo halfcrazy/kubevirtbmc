@@ -2,11 +2,13 @@ package virtbmcagent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,8 +36,10 @@ var _ = Describe("Agent e2e", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("ensuring IPMI is disabled for a clean starting state")
-		env.BMC.Spec.IPMI = nil
-		Expect(k8sClient.Update(ctx, env.BMC)).To(Succeed())
+		if !standaloneMode {
+			env.BMC.Spec.IPMI = nil
+			Expect(k8sClient.Update(ctx, env.BMC)).To(Succeed())
+		}
 
 		clientset, err := kubernetes.NewForConfig(config)
 		Expect(err).NotTo(HaveOccurred())
@@ -73,6 +77,9 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 	Context("IPMI enable/disable toggle", func() {
 		It("should start with IPMI disabled by default, verify failure, then enable", func() {
+			if standaloneMode {
+				Skip("IPMI is toggled via --enable-ipmi at process start in standalone mode; there is no CR to flip")
+			}
 			By("verifying IPMI commands fail when disabled by default")
 			_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "status"))
 			Expect(err).To(HaveOccurred(), "IPMI command should fail when IPMI is disabled")
@@ -304,11 +311,18 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "off"))
 				Expect(err).NotTo(HaveOccurred())
 
-				// Second power-off while VMI is being torn down should
-				// succeed idempotently.
-				_, stderr, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "off"))
-				Expect(err).NotTo(HaveOccurred(),
-					"repeated power-off should succeed; stderr=%q", stderr)
+				// Power off again while the first stop is still tearing the VMI
+				// down: the handler returns Node Busy (0xC0) until vm.Status.Ready
+				// flips, and a retry then succeeds.
+				Eventually(func() error {
+					_, stderr, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "off"))
+					if err != nil {
+						Expect(stderr).To(ContainSubstring("Node busy"),
+							"only the retryable Node Busy error is tolerated; stderr=%q", stderr)
+					}
+					return err
+				}, vmPowerStatusTimeout, agentTestInterval).Should(Succeed(),
+					"repeated power-off should eventually succeed")
 
 				waitForVMIDeleted(ctx, k8sClient, ns)
 			})
@@ -1050,18 +1064,33 @@ var _ = Describe("Agent e2e", Ordered, func() {
 			const wantClass = "kubevirtbmc-e2e-override-sc"
 
 			BeforeAll(func() {
+				if standaloneMode {
+					Skip("the virtual media StorageClass comes from --storage-class in standalone mode, not the CR")
+				}
 				By("creating a dedicated StorageClass")
 				Expect(k8sClient.Create(ctx, newStorageClass(wantClass))).To(Succeed())
 				DeferCleanup(func() {
 					_ = k8sClient.Delete(ctx, newStorageClass(wantClass))
 				})
 
-				By("setting storageClassName on the VirtualMachineBMC")
+				By("setting spec.redfish.virtualMedia.storage.storageClassName on the VirtualMachineBMC")
 				bmc := &bmcv1.VirtualMachineBMC{}
 				Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: agentBMCName}, bmc)).To(Succeed())
 				orig := bmc.DeepCopy()
-				bmc.Spec.StorageClassName = util.Ptr(wantClass)
+				bmc.Spec.Redfish = &bmcv1.RedfishSpec{
+					VirtualMedia: &bmcv1.VirtualMediaSpec{
+						Storage: &bmcv1.VirtualMediaStorageSpec{
+							StorageClassName: util.Ptr(wantClass),
+						},
+					},
+				}
 				Expect(k8sClient.Patch(ctx, bmc, client.MergeFrom(orig))).To(Succeed())
+
+				// The controller renders --storage-class into the agent args and
+				// rolls the pod; inserting before the rollout completes would hit
+				// the old pod with the old (default) StorageClass.
+				By("waiting for the agent to restart with the new --storage-class arg")
+				waitForAgentArgs(ctx, k8sClient, ns, agentDeploymentName, "--storage-class", wantClass)
 			})
 
 			It("should insert media and create a DataVolume using the configured StorageClass", func() {
@@ -1072,6 +1101,111 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 				verifyDataVolumeExists(ctx, k8sClient, ns, agentVMName)
 				verifyDataVolumeStorageClass(ctx, k8sClient, ns, agentVMName, wantClass)
+			})
+		})
+
+		Context("Virtual Media TLS overrides", func() {
+			var (
+				imageURL           string
+				correctCAConfigMap string
+				wrongCAConfigMap   string
+			)
+
+			BeforeAll(func() {
+				if standaloneMode {
+					Skip("virtual media TLS comes from --virtual-media-* flags in standalone mode, not the CR")
+				}
+				By("deploying an in-cluster HTTPS server with a self-signed certificate")
+				var cleanup func()
+				imageURL, correctCAConfigMap, wrongCAConfigMap, cleanup = setupVirtualMediaTLSServer(ctx, k8sClient, ns)
+				DeferCleanup(cleanup)
+			})
+
+			setVirtualMediaTLS := func(tls *bmcv1.VirtualMediaTLSSpec) {
+				bmc := &bmcv1.VirtualMachineBMC{}
+				Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: agentBMCName}, bmc)).To(Succeed())
+				orig := bmc.DeepCopy()
+				bmc.Spec.Redfish = &bmcv1.RedfishSpec{VirtualMedia: &bmcv1.VirtualMediaSpec{TLS: tls}}
+				Expect(k8sClient.Patch(ctx, bmc, client.MergeFrom(orig))).To(Succeed())
+
+				// The CR reaches the agent only through the rendered
+				// Deployment args: wait for the controller to re-render and
+				// roll the pod, or insertMedia below hits the old pod with
+				// stale TLS flags.
+				waitForAgentTLSArgs(ctx, k8sClient, ns, tls)
+			}
+
+			insertMedia := func() string {
+				body := fmt.Sprintf(`{"Image":%q,"Inserted":true}`, imageURL)
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("POST", "/Managers/BMC/VirtualMedia/CD1/Actions/VirtualMedia.InsertMedia", body))
+				Expect(err).NotTo(HaveOccurred())
+				return strings.TrimSpace(out)
+			}
+
+			ejectMediaAndVerifyRemoved := func() {
+				out, err := testutil.RunCurlRedfish(ctx, config, ns, redfishSession("POST", "/Managers/BMC/VirtualMedia/CD1/Actions/VirtualMedia.EjectMedia", `{}`))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(strings.TrimSpace(out)).To(SatisfyAny(ContainSubstring("200"), ContainSubstring("204")))
+				verifyDataVolumeDeleted(ctx, k8sClient, ns, agentVMName)
+			}
+
+			It("accepts the self-signed server when insecureSkipVerify is true", func() {
+				setVirtualMediaTLS(&bmcv1.VirtualMediaTLSSpec{InsecureSkipVerify: util.Ptr(true)})
+
+				Expect(insertMedia()).To(ContainSubstring("200"))
+
+				verifyDataVolumeExists(ctx, k8sClient, ns, agentVMName)
+				verifyDataVolumeInsecureSkipVerify(ctx, k8sClient, ns, agentVMName, true)
+				verifyDataVolumeSucceeded(ctx, k8sClient, ns, agentVMName)
+
+				ejectMediaAndVerifyRemoved()
+			})
+
+			It("accepts the self-signed server when caBundleConfigMapRef points to the signing CA", func() {
+				setVirtualMediaTLS(&bmcv1.VirtualMediaTLSSpec{
+					CABundleConfigMapRef: &corev1.LocalObjectReference{Name: correctCAConfigMap},
+				})
+
+				Expect(insertMedia()).To(ContainSubstring("200"))
+
+				verifyDataVolumeExists(ctx, k8sClient, ns, agentVMName)
+				verifyDataVolumeCertConfigMap(ctx, k8sClient, ns, agentVMName, correctCAConfigMap)
+				verifyDataVolumeSucceeded(ctx, k8sClient, ns, agentVMName)
+
+				ejectMediaAndVerifyRemoved()
+			})
+
+			It("rejects the self-signed server when caBundleConfigMapRef points to an unrelated CA", func() {
+				setVirtualMediaTLS(&bmcv1.VirtualMediaTLSSpec{
+					CABundleConfigMapRef: &corev1.LocalObjectReference{Name: wrongCAConfigMap},
+				})
+
+				out := insertMedia()
+				Expect(out).To(ContainSubstring("500"))
+				Expect(out).NotTo(ContainSubstring(`"200"`))
+
+				verifyDataVolumeAbsent(ctx, k8sClient, ns, agentVMName)
+			})
+
+			It("rejects when caBundleConfigMapRef points to a ConfigMap that does not exist", func() {
+				setVirtualMediaTLS(&bmcv1.VirtualMediaTLSSpec{
+					CABundleConfigMapRef: &corev1.LocalObjectReference{Name: "kubevirtbmc-e2e-nonexistent-ca-bundle"},
+				})
+
+				out := insertMedia()
+				Expect(out).To(ContainSubstring("500"))
+				Expect(out).NotTo(ContainSubstring(`"200"`))
+
+				verifyDataVolumeAbsent(ctx, k8sClient, ns, agentVMName)
+			})
+
+			It("rejects the self-signed server when no TLS override is configured", func() {
+				setVirtualMediaTLS(nil)
+
+				out := insertMedia()
+				Expect(out).To(ContainSubstring("500"))
+
+				verifyDataVolumeAbsent(ctx, k8sClient, ns, agentVMName)
 			})
 		})
 	})

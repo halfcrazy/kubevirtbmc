@@ -31,6 +31,9 @@ const (
 	VMNameLabel                      = "kubevirt.io/vm-name"
 )
 
+// AnnotationDataVolumeSizeMargin pads the inserted-media DataVolume's size by this many percent; absent/invalid defaults to 0.
+const AnnotationDataVolumeSizeMargin = "bmc.kubevirt.io/datavolume-size-margin"
+
 // VirtualMachineBMCSpec defines the desired state of VirtualMachineBMC.
 type VirtualMachineBMCSpec struct {
 	// BMC Service configuration
@@ -49,9 +52,83 @@ type VirtualMachineBMCSpec struct {
 	// +optional
 	IPMI *IPMISpec `json:"ipmi,omitempty"`
 
-	// StorageClassName is the StorageClass for the DataVolume created on virtual media insert; unset falls back to the cluster default.
+	// Redfish configures Redfish-specific behavior.
+	// +optional
+	Redfish *RedfishSpec `json:"redfish,omitempty"`
+}
+
+// VirtualMediaStorageClassName returns the configured StorageClass for the DataVolume
+// created on virtual media insert, or nil if unset at any level.
+func (s VirtualMachineBMCSpec) VirtualMediaStorageClassName() *string {
+	if s.Redfish == nil || s.Redfish.VirtualMedia == nil || s.Redfish.VirtualMedia.Storage == nil {
+		return nil
+	}
+	return s.Redfish.VirtualMedia.Storage.StorageClassName
+}
+
+// VirtualMediaVolumeMode returns the configured volume mode for the DataVolume
+// created on virtual media insert, or nil if unset at any level.
+func (s VirtualMachineBMCSpec) VirtualMediaVolumeMode() *corev1.PersistentVolumeMode {
+	if s.Redfish == nil || s.Redfish.VirtualMedia == nil || s.Redfish.VirtualMedia.Storage == nil {
+		return nil
+	}
+	return s.Redfish.VirtualMedia.Storage.VolumeMode
+}
+
+// RedfishVirtualMediaTLS returns the configured TLS behavior for fetching virtual
+// media images over https, or nil if unset at any level.
+func (s VirtualMachineBMCSpec) RedfishVirtualMediaTLS() *VirtualMediaTLSSpec {
+	if s.Redfish == nil || s.Redfish.VirtualMedia == nil {
+		return nil
+	}
+	return s.Redfish.VirtualMedia.TLS
+}
+
+// RedfishSpec configures Redfish-specific behavior.
+type RedfishSpec struct {
+	// VirtualMedia configures the DataVolume created on virtual media insert and TLS behavior when
+	// fetching virtual media images over https.
+	// +optional
+	VirtualMedia *VirtualMediaSpec `json:"virtualMedia,omitempty"`
+}
+
+// VirtualMediaSpec configures virtual media insertion.
+type VirtualMediaSpec struct {
+	// Storage configures the storage backing the DataVolume.
+	// +optional
+	Storage *VirtualMediaStorageSpec `json:"storage,omitempty"`
+
+	// TLS configures TLS behavior when fetching virtual media images over https.
+	// +optional
+	TLS *VirtualMediaTLSSpec `json:"tls,omitempty"`
+}
+
+// VirtualMediaTLSSpec configures TLS behavior when fetching virtual media images over https.
+type VirtualMediaTLSSpec struct {
+	// InsecureSkipVerify disables TLS certificate verification when fetching a virtual media image over https.
+	// +optional
+	InsecureSkipVerify *bool `json:"insecureSkipVerify,omitempty"`
+
+	// CABundleConfigMapRef references a ConfigMap, in the same namespace as the VirtualMachineBMC, containing a
+	// CA bundle (key "ca.pem") trusted when fetching a virtual media image over https.
+	// +optional
+	CABundleConfigMapRef *corev1.LocalObjectReference `json:"caBundleConfigMapRef,omitempty"`
+}
+
+// VirtualMediaStorageSpec configures the DataVolume's storage.
+type VirtualMediaStorageSpec struct {
+	// StorageClassName is the StorageClass for the DataVolume created on virtual media insert; unset
+	// falls back to the cluster default.
 	// +optional
 	StorageClassName *string `json:"storageClassName,omitempty"`
+
+	// VolumeMode is the volume mode for the DataVolume created on virtual media insert; unset keeps
+	// today's behavior (Filesystem, CDI's own default). Block requests a raw block device instead,
+	// which has no filesystem overhead and so isn't subject to the StorageClass's CDI
+	// filesystemOverhead setting — useful when that setting can't accommodate an exact-size image.
+	// +optional
+	// +kubebuilder:validation:Enum=Filesystem;Block
+	VolumeMode *corev1.PersistentVolumeMode `json:"volumeMode,omitempty"`
 }
 
 // Service configuration for the BMC service.
@@ -102,12 +179,18 @@ const (
 )
 
 // BootOverrideStatus records the currently active boot override driven through
-// the BMC (IPMI Set System Boot Options / Redfish Boot). It is written by the
-// virtbmc pod and consumed by the bootorderrestore controller, which restores
-// the captured boot state once a oneshot override has been consumed (detected
-// via VMI UID change).
+// the BMC (IPMI Set System Boot Options / Redfish Boot). The virtbmc agent
+// persists it either in this CR status or in a standalone state file and
+// restores the captured boot state after a oneshot override is consumed.
 type BootOverrideStatus struct {
 	Mode BootOverrideMode `json:"mode"`
+
+	// VMUID scopes this state to one VirtualMachine object so a deleted VM's
+	// backup is never applied to a different VM recreated with the same name.
+	// Records written before this field existed are adopted by stamping the
+	// current VM UID, then reconciled normally.
+	// +optional
+	VMUID string `json:"vmUID,omitempty"`
 
 	// VMIUID is the UID of the VMI generation current when a oneshot override
 	// was issued. A UID change means the oneshot boot was consumed.

@@ -61,3 +61,29 @@ func (b *DataVolumeBuilder) WithStorageClass(name string) *DataVolumeBuilder {
 	b.dv.Spec.Storage.StorageClassName = &name
 	return b
 }
+
+func (b *DataVolumeBuilder) WithVolumeMode(mode corev1.PersistentVolumeMode) *DataVolumeBuilder {
+	if b.dv.Spec.Storage == nil {
+		b.dv.Spec.Storage = &cdiv1.StorageSpec{}
+	}
+	b.dv.Spec.Storage.VolumeMode = &mode
+	return b
+}
+
+func (b *DataVolumeBuilder) WithAccessModes(modes ...corev1.PersistentVolumeAccessMode) *DataVolumeBuilder {
+	if b.dv.Spec.Storage == nil {
+		b.dv.Spec.Storage = &cdiv1.StorageSpec{}
+	}
+	b.dv.Spec.Storage.AccessModes = modes
+	return b
+}
+
+func (b *DataVolumeBuilder) WithInsecureSkipVerify(insecureSkipVerify bool) *DataVolumeBuilder {
+	b.dv.Spec.Source.HTTP.InsecureSkipVerify = &insecureSkipVerify
+	return b
+}
+
+func (b *DataVolumeBuilder) WithCertConfigMap(name string) *DataVolumeBuilder {
+	b.dv.Spec.Source.HTTP.CertConfigMap = name
+	return b
+}
