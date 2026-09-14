@@ -9,6 +9,7 @@ Thank you for your interest in contributing to KubeVirtBMC! This document provid
 - [Ways to Contribute](#ways-to-contribute)
 - [Reporting Bugs](#reporting-bugs)
 - [Suggesting Features](#suggesting-features)
+- [Protocol Specifications](#protocol-specifications)
 - [Development Setup](#development-setup)
 - [Development Workflow](#development-workflow)
 - [Branching Strategy](#branching-strategy)
@@ -48,6 +49,13 @@ Before filing a bug report, search existing issues to avoid duplicates. When ope
 ## Suggesting Features
 
 Open an issue using the **Feature Request** or **Enhancement** template. Describe the use case and the problem it solves. For larger changes, consider discussing the design in a GitHub Discussion or on Discord before investing implementation effort.
+
+## Protocol Specifications
+
+KubeVirtBMC implements two protocols governed by official specifications. All protocol parsing, message construction, and interaction rules must align with these documents — consult them directly rather than relying on third-party summaries. If a scenario requires a deviation, base it on the core specification and record the rationale in the PR description or a design doc.
+
+- **Redfish** — DMTF Redfish Specification ([DSP0266](https://www.dmtf.org/dsp/DSP0266)); schema bundles and OpenAPI definitions at [redfish.dmtf.org](https://redfish.dmtf.org)
+- **IPMI** — [Intelligent Platform Management Interface Specification, Second Generation v2.0 rev 1.1](https://www.intel.com/content/dam/www/public/us/en/documents/product-briefs/ipmi-second-gen-interface-spec-v2-rev1-1.pdf) (PDF)
 
 ## Development Setup
 
