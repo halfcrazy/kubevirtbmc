@@ -31,8 +31,15 @@ var (
 )
 
 // BootDeviceToRedfishTarget maps a BootDevice to the Redfish BootSource enum.
+// An underivable device ("" when no device carries a bootOrder) renders as
+// None: the DMTF schema marks the property omitempty, so mapping to the zero
+// value would silently drop BootSourceOverrideTarget from the response
+// instead of stating that no override target exists.
 func BootDeviceToRedfishTarget(d BootDevice) server.ComputerSystemBootSource {
-	return bootSourceMap[d]
+	if target, ok := bootSourceMap[d]; ok {
+		return target
+	}
+	return server.COMPUTERSYSTEMBOOTSOURCE_NONE
 }
 
 // EFIBootToRedfishMode maps the EFI firmware flag to the Redfish override mode.
@@ -71,13 +78,6 @@ func NewComputerSystem(id, name string, powerState server.ResourcePowerState) *C
 			ComputerSystemReset: server.ComputerSystemV1220Reset{
 				Target: fmt.Sprintf("/redfish/v1/Systems/%s/Actions/ComputerSystem.Reset", id),
 				Title:  "Reset",
-				ResetTypeRedfishAllowableValues: []server.ResourceResetType{
-					server.RESOURCERESETTYPE_ON,
-					server.RESOURCERESETTYPE_FORCE_OFF,
-					server.RESOURCERESETTYPE_GRACEFUL_SHUTDOWN,
-					server.RESOURCERESETTYPE_GRACEFUL_RESTART,
-					server.RESOURCERESETTYPE_FORCE_RESTART,
-				},
 			},
 		},
 		Boot: server.ComputerSystemV1220Boot{
@@ -85,7 +85,9 @@ func NewComputerSystem(id, name string, powerState server.ResourcePowerState) *C
 			BootSourceOverrideMode:    server.COMPUTERSYSTEMV1220BOOTSOURCEOVERRIDEMODE_LEGACY,
 			BootSourceOverrideTarget:  server.COMPUTERSYSTEMBOOTSOURCE_HDD,
 		},
-		OperatingSystem: fmt.Sprintf("/redfish/v1/Systems/%s/OperatingSystem", id),
+		OperatingSystem: server.OdataV4IdRef{
+			OdataId: fmt.Sprintf("/redfish/v1/Systems/%s/OperatingSystem", id),
+		},
 		// The VirtualMedia service is provided by the manager: the spec
 		// defines the collection only under /redfish/v1/Managers/{id}, and
 		// per the ComputerSystem CSDL this link points at the collection

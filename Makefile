@@ -3,11 +3,15 @@
 VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null || echo "$(shell git rev-parse --abbrev-ref HEAD)-head")
 COMMIT ?= $(shell git rev-parse HEAD)
 
-DIRTY :=
+# -dirty marks a build from a dirty checkout, but only for the auto-derived
+# VERSION. An explicit VERSION (CI) names the images the pipeline already
+# built; appending -dirty breaks e2e image lookup once `make deploy` has
+# legitimately dirtied the tree (kustomize edit set image).
+ifeq ($(origin VERSION),file)
 ifneq ($(shell git status --porcelain --untracked-files=no),)
-DIRTY := -dirty
+VERSION := $(VERSION)-dirty
 endif
-VERSION := $(VERSION)$(DIRTY)
+endif
 # Sanitize for Docker image tag: replace chars not in [a-zA-Z0-9_.-] with '-'
 export TAG = $(shell echo "$(VERSION)" | sed 's|[^a-zA-Z0-9_.-]|-|g')
 
@@ -76,12 +80,8 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 
 .PHONY: generate
-generate: controller-gen generate-implemented-routes ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
+generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
-
-.PHONY: generate-implemented-routes
-generate-implemented-routes: ## Derive the implemented Redfish route set from pkg/redfish/api_service.go.
-	go generate ./pkg/redfish
 
 .PHONY: generate-kubevirt-crd
 generate-kubevirt-crd: controller-gen ## Clone KubeVirt API and generate CustomResourceDefinition objects for integration testing purposes.
@@ -97,17 +97,34 @@ generate-kubevirt-crd: controller-gen ## Clone KubeVirt API and generate CustomR
 generate-mock: mockgen ## Generate mocks for interfaces.
 	$(MOCKGEN) -source=pkg/resourcemanager/resourcemanager.go -destination=pkg/resourcemanager/mock_resourcemanager.go -package=resourcemanager
 
-REDFISH_SCHEMA_BUNDLE ?= DSP8010_2024.3
+# Keep in sync with hack/redfish/spec/openapi.yaml's own vendored version
+# (its `info.version`) and hack/redfish/spec/schemas/ -- vendor-redfish-schema
+# pulls from whatever bundle this points at, so bumping it is how you'd pick
+# up a newer DMTF schema release.
+REDFISH_SCHEMA_BUNDLE ?= DSP8010_2023.3
 .PHONY: download-redfish-schema
-download-schema: ## Download the Redfish schema.
+download-redfish-schema: ## Download and extract the Redfish DSP8010 schema bundle used by vendor-redfish-schema.
 	test -d ./hack/$(REDFISH_SCHEMA_BUNDLE) || \
-	( curl -sSL https://www.dmtf.org/sites/default/files/standards/documents/$(REDFISH_SCHEMA_BUNDLE).zip -o ./hack/$(REDFISH_SCHEMA_BUNDLE).zip && \
-	unzip -q -d ./hack/ ./hack/$(REDFISH_SCHEMA_BUNDLE).zip && \
+	( curl -sSL -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36" https://www.dmtf.org/sites/default/files/standards/documents/$(REDFISH_SCHEMA_BUNDLE).zip -o ./hack/$(REDFISH_SCHEMA_BUNDLE).zip && \
+	mkdir -p ./hack/$(REDFISH_SCHEMA_BUNDLE) && \
+	unzip -q -d ./hack/$(REDFISH_SCHEMA_BUNDLE) ./hack/$(REDFISH_SCHEMA_BUNDLE).zip && \
 	rm -f ./hack/$(REDFISH_SCHEMA_BUNDLE).zip )
+
+.PHONY: vendor-redfish-schema
+vendor-redfish-schema: download-redfish-schema ## Vendor the DMTF schema files reachable from implemented-operations.yaml into hack/redfish/spec/schemas/, retiring the live $ref fetch. Run after adding an implemented-operations.yaml entry or bumping REDFISH_SCHEMA_BUNDLE; commit the result.
+	go run ./hack/redfish/vendor-redfish-schemas \
+		-spec ./hack/redfish/spec/openapi.yaml \
+		-allowlist ./hack/redfish/spec/implemented-operations.yaml \
+		-bundle "$$(find ./hack/$(REDFISH_SCHEMA_BUNDLE) -type d -name openapi | head -1)" \
+		-schemas-dir ./hack/redfish/spec/schemas
 
 .PHONY: generate-redfish-api
 generate-redfish-api: ## Generate Redfish API server.
 	./hack/redfish/generate.sh
+
+.PHONY: redfish-interop
+redfish-interop: ## Run the Redfish Interop Validator locally against the fake-client interopserver.
+	./hack/redfish/run-interop.sh
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
@@ -162,8 +179,15 @@ endif
 
 .PHONY: e2e-test
 e2e-test: generate fmt vet kind ## Run end-to-end tests (controller first, then agent: IPMI, Redfish, Virtual Media).
-	go test -v -timeout 15m ./test/virtbmc-controller/...
-	go test -v -timeout 15m ./test/virtbmc-agent/...
+	# -count=1: e2e inputs (Kind cluster state, env vars like AGENT_STANDALONE
+	# read at package init) are invisible to the go test result cache.
+	go test -v -count=1 -timeout 15m ./test/virtbmc-controller/...
+	go test -v -count=1 -timeout 15m ./test/virtbmc-agent/...
+	$(MAKE) e2e-test-standalone
+
+.PHONY: e2e-test-standalone
+e2e-test-standalone: generate fmt vet kind ## Run agent end-to-end tests in standalone mode (no CRD/controller).
+	AGENT_STANDALONE=true go test -v -count=1 -timeout 15m ./test/virtbmc-agent/...
 
 .PHONY: local-e2e-test
 local-e2e-test: e2e-setup e2e-test e2e-teardown ## Run end-to-end tests locally.
@@ -199,7 +223,7 @@ endif
 .PHONY: metal3-e2e-test
 metal3-e2e-test: generate fmt vet ## Run Metal3/Ironic integration tests (requires metal3-e2e-setup + built images).
 	# go test -timeout bounds the process; -ginkgo.timeout bounds the suite (Ginkgo default is 1h).
-	KIND_CLUSTER=$(METAL3_CLUSTER) go test -v ./test/metal3-e2e/... -ginkgo.v -ginkgo.timeout=120m -timeout 120m
+	KIND_CLUSTER=$(METAL3_CLUSTER) go test -v -count=1 ./test/metal3-e2e/... -ginkgo.v -ginkgo.timeout=120m -timeout 120m
 
 .PHONY: metal3-e2e-diagnostics
 metal3-e2e-diagnostics: ## Dump Metal3 e2e diagnostics (pods, BMH, Ironic logs) into ./artifacts. Best-effort, never fails.
@@ -233,7 +257,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
-docker-build: generate-implemented-routes ## Build docker images with the manager and the agent respectively.
+docker-build: ## Build docker images with the manager and the agent respectively.
 	$(CONTAINER_TOOL) build -t $(MGR_IMG) --build-arg LINKFLAGS=$(LINKFLAGS) .
 	$(CONTAINER_TOOL) build -t $(AGT_IMG) --build-arg LINKFLAGS=$(LINKFLAGS) --build-arg TARGETARCH=amd64 -f Dockerfile.virtbmc .
 ifeq ($(PUSH),true)
@@ -249,7 +273,7 @@ endif
 # To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
 PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
 .PHONY: docker-buildx
-docker-buildx: generate-implemented-routes ## Build and push docker image for the manager for cross-platform support
+docker-buildx: ## Build and push docker image for the manager for cross-platform support
 	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
 	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
 	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile.virtbmc > Dockerfile.virtbmc.cross

@@ -1,6 +1,8 @@
 package util
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/http"
 	neturl "net/url"
@@ -17,11 +19,22 @@ import (
 // immediate binding of the underlying PVC, bypassing WaitForFirstConsumer.
 const AnnStorageBindImmediateRequested = "cdi.kubevirt.io/storage.bind.immediate.requested"
 
+// WithImportMargin pads size by marginPercent; marginPercent <= 0 is a no-op.
+func WithImportMargin(size int64, marginPercent int) int64 {
+	if marginPercent <= 0 {
+		return size
+	}
+	return size + size*int64(marginPercent)/100
+}
+
+// CABundleConfigMapKey is the ConfigMap data key CDI expects a CA bundle under when referenced via CertConfigMap.
+const CABundleConfigMapKey = "ca.pem"
+
 func Ptr[T any](value T) *T {
 	return &value
 }
 
-func GetRemoteFileSize(url string) (int64, error) {
+func GetRemoteFileSize(url string, insecureSkipVerify bool, caBundle []byte) (int64, error) {
 	parsedURL, err := neturl.Parse(url)
 	if err != nil {
 		return 0, fmt.Errorf("invalid URL: %w", err)
@@ -33,6 +46,23 @@ func GetRemoteFileSize(url string) (int64, error) {
 
 	client := &http.Client{
 		Timeout: 5 * time.Second,
+	}
+
+	if insecureSkipVerify || len(caBundle) > 0 {
+		tlsConfig := &tls.Config{InsecureSkipVerify: insecureSkipVerify} //nolint:gosec // opt-in, user-controlled
+
+		if len(caBundle) > 0 {
+			pool, err := x509.SystemCertPool()
+			if err != nil {
+				return 0, fmt.Errorf("load system CA pool: %w", err)
+			}
+			if !pool.AppendCertsFromPEM(caBundle) {
+				return 0, fmt.Errorf("invalid CA bundle: no certificates found")
+			}
+			tlsConfig.RootCAs = pool
+		}
+
+		client.Transport = &http.Transport{TLSClientConfig: tlsConfig}
 	}
 
 	resp, err := client.Head(parsedURL.String())
@@ -53,33 +83,62 @@ func GetRemoteFileSize(url string) (int64, error) {
 	return size, nil
 }
 
-// ConstructDataVolume builds the DataVolume backing an inserted virtual media image; an empty storageClassName falls back to the cluster default.
-func ConstructDataVolume(namespace, name, url string, size int64, storageClassName string) *cdiv1.DataVolume {
+// DataVolumeOptions holds the inputs for ConstructDataVolume. An empty StorageClassName falls back to the
+// cluster default, VolumeMode falls back to CDI's own default (Filesystem) when nil, and CertConfigMap is a
+// ConfigMap name in the DataVolume's namespace.
+type DataVolumeOptions struct {
+	Namespace          string
+	Name               string
+	URL                string
+	Size               int64
+	StorageClassName   string
+	VolumeMode         *corev1.PersistentVolumeMode
+	InsecureSkipVerify bool
+	CertConfigMap      string
+}
+
+// ConstructDataVolume builds the DataVolume backing an inserted virtual media image.
+func ConstructDataVolume(params DataVolumeOptions) *cdiv1.DataVolume {
 	storage := &cdiv1.StorageSpec{
+		VolumeMode: params.VolumeMode,
 		Resources: corev1.VolumeResourceRequirements{
 			Requests: corev1.ResourceList{
-				corev1.ResourceStorage: *resource.NewQuantity(size, resource.BinarySI),
+				corev1.ResourceStorage: *resource.NewQuantity(params.Size, resource.BinarySI),
 			},
 		},
 	}
 
-	if storageClassName != "" {
-		storage.StorageClassName = &storageClassName
+	if params.VolumeMode != nil {
+		storage.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+	}
+
+	if params.StorageClassName != "" {
+		storage.StorageClassName = &params.StorageClassName
+	}
+
+	httpSource := &cdiv1.DataVolumeSourceHTTP{
+		URL: params.URL,
+	}
+
+	if params.InsecureSkipVerify {
+		httpSource.InsecureSkipVerify = &params.InsecureSkipVerify
+	}
+
+	if params.CertConfigMap != "" {
+		httpSource.CertConfigMap = params.CertConfigMap
 	}
 
 	return &cdiv1.DataVolume{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: namespace,
-			Name:      name,
+			Namespace: params.Namespace,
+			Name:      params.Name,
 			Annotations: map[string]string{
 				AnnStorageBindImmediateRequested: "",
 			},
 		},
 		Spec: cdiv1.DataVolumeSpec{
 			Source: &cdiv1.DataVolumeSource{
-				HTTP: &cdiv1.DataVolumeSourceHTTP{
-					URL: url,
-				},
+				HTTP: httpSource,
 			},
 			Storage: storage,
 		},

@@ -74,6 +74,20 @@ func RemoveToken(token string) {
 	delete(ts.store, token)
 }
 
+// RemoveTokenBySessionID deletes the session with the given ID. The Redfish
+// DELETE on a session resource addresses it by session ID, while the store is
+// keyed by token.
+func RemoveTokenBySessionID(sessionID string) {
+	ts.rwMutex.Lock()
+	defer ts.rwMutex.Unlock()
+
+	for token, tokenInfo := range ts.store {
+		if tokenInfo.ID == sessionID {
+			delete(ts.store, token)
+		}
+	}
+}
+
 func GetTokenFromSessionID(sessionID string) (TokenInfo, bool) {
 	ts.rwMutex.RLock()
 	defer ts.rwMutex.RUnlock()
@@ -85,6 +99,19 @@ func GetTokenFromSessionID(sessionID string) (TokenInfo, bool) {
 	}
 
 	return TokenInfo{}, false
+}
+
+// ListTokens returns a snapshot of every live session, for building the
+// Redfish session collection.
+func ListTokens() []TokenInfo {
+	ts.rwMutex.RLock()
+	defer ts.rwMutex.RUnlock()
+
+	tokens := make([]TokenInfo, 0, len(ts.store))
+	for _, tokenInfo := range ts.store {
+		tokens = append(tokens, tokenInfo)
+	}
+	return tokens
 }
 
 func AuthMiddleware(bmcUser, bmcPassword string) func(next http.Handler) http.Handler {

@@ -56,8 +56,27 @@ func (h *handler) GetSession(sessionID string) (string, string, error) {
 	return tokenInfo.ID, tokenInfo.Username, nil
 }
 
+func (h *handler) GetSessionCollection() *server.SessionCollectionSessionCollection {
+	tokens := session.ListTokens()
+	members := make([]server.OdataV4IdRef, 0, len(tokens))
+	for _, t := range tokens {
+		members = append(members, server.OdataV4IdRef{
+			OdataId: fmt.Sprintf("/redfish/v1/SessionService/Sessions/%s", t.ID),
+		})
+	}
+	return &server.SessionCollectionSessionCollection{
+		OdataContext:      "/redfish/v1/$metadata#SessionCollection.SessionCollection",
+		OdataId:           "/redfish/v1/SessionService/Sessions",
+		OdataType:         "#SessionCollection.SessionCollection",
+		Description:       "Session Collection",
+		Name:              "Session Collection",
+		Members:           members,
+		MembersodataCount: int64(len(members)),
+	}
+}
+
 func (h *handler) DeleteSession(sessionID string) {
-	session.RemoveToken(sessionID)
+	session.RemoveTokenBySessionID(sessionID)
 }
 
 func (h *handler) GetServiceRoot() *server.ServiceRootV1161ServiceRoot {
@@ -226,6 +245,19 @@ func (h *handler) GetComputerSystem(ctx context.Context) (*server.ComputerSystem
 		} else {
 			cs.Boot.BootSourceOverrideEnabled = server.COMPUTERSYSTEMV1220BOOTSOURCEOVERRIDEENABLED_DISABLED
 		}
+	} else if override, oerr := h.rm.GetBootOverride(ctx); oerr == nil {
+		// GetBootFlags fails when no device carries a boot order; the target
+		// is underivable then, but the Enabled bit is not — the in-memory
+		// model may still hold an already-consumed override, or Disabled
+		// while one is recorded (agent restart).
+		enabled := server.COMPUTERSYSTEMV1220BOOTSOURCEOVERRIDEENABLED_DISABLED
+		if override != nil {
+			enabled = server.COMPUTERSYSTEMV1220BOOTSOURCEOVERRIDEENABLED_CONTINUOUS
+			if override.Mode == bmcv1.BootOverrideModeOneshot {
+				enabled = server.COMPUTERSYSTEMV1220BOOTSOURCEOVERRIDEENABLED_ONCE
+			}
+		}
+		cs.Boot.BootSourceOverrideEnabled = enabled
 	}
 
 	return cs, nil
