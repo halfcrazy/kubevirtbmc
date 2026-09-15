@@ -287,7 +287,7 @@ This appends `Signed-off-by: Your Name <your@email.com>` to the commit message. 
    - What problem does this solve?
    - What was changed and why?
    - How was it tested?
-   - Reference to the related issue (e.g., `Closes #123`)
+   - Reference to the related issue as a plain `#123` link — avoid GitHub's auto-close keywords (`fixes`/`closes`/`resolves`), since an issue may span multiple PRs and is closed by a maintainer once all of them land
 
 5. **CI must pass** — the pipeline runs lint, unit tests, binary build, and e2e tests. Investigate and fix any failures.
 
