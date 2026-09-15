@@ -47,4 +47,9 @@ make redfish-interop  # required when Redfish responses or routes change; CI enf
 
 ## Commits and PRs
 
-[Conventional Commits](https://www.conventionalcommits.org/) with DCO sign-off (`git commit -s`). Fixes land on `main` first, then backport to release branches. Every change tracks an issue: if none exists for the problem you're fixing, open one first — no PR-only changes. Full rules: [CONTRIBUTING.md](CONTRIBUTING.md).
+- [Conventional Commits](https://www.conventionalcommits.org/), DCO sign-off (`git commit -s`).
+- Fixes land on `main` first, then backport to release branches.
+- Every change tracks an issue — if none exists for the problem, open one first; no PR-only changes.
+- Reference the issue with a plain `#123`, never auto-close keywords (`fixes`/`closes`/`resolves`): an issue can span several PRs (code, chart, docs, backports), and a maintainer closes it once all of them land.
+
+Full rules: [CONTRIBUTING.md](CONTRIBUTING.md).
