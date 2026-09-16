@@ -283,6 +283,8 @@ This appends `Signed-off-by: Your Name <your@email.com>` to the commit message. 
 
 5. **CI must pass** — the pipeline runs lint, unit tests, binary build, and e2e tests. Investigate and fix any failures.
 
+   The Metal3 e2e suite only auto-runs for PRs touching its harness paths; for anything else, ask a maintainer to apply the `need-metal3-e2e` label.
+
 6. **Address review feedback** by pushing additional commits. Do not force-push to a PR branch that is under review unless a maintainer requests it.
 
 7. **A maintainer will merge** the PR once it has at least one approval and all checks are green.
