@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
@@ -56,23 +57,35 @@ type VirtualMachineResourceManager struct {
 	name       string
 	systemUUID string
 
+	consoleOpener ConsoleOpener
+	consoleMu     sync.Mutex
+	consoleBusy   bool
+
 	computerSystem ComputerSystemInterface
 	manager        ManagerInterface
 	virtualMedia   VirtualMediaInterface
 }
+
+// Option customizes a VirtualMachineResourceManager.
+type Option func(*VirtualMachineResourceManager)
 
 func NewVirtualMachineResourceManager(
 	virtClient kvclient.Interface,
 	cdiClient cdiclient.Interface,
 	bmcClient client.Client,
 	bmcName string,
+	opts ...Option,
 ) *VirtualMachineResourceManager {
-	return &VirtualMachineResourceManager{
+	m := &VirtualMachineResourceManager{
 		virtClient: virtClient,
 		cdiClient:  cdiClient,
 		bmcClient:  bmcClient,
 		bmcName:    bmcName,
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 func (m *VirtualMachineResourceManager) Initialize(ctx context.Context, namespace, name string) error {

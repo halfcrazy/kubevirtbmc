@@ -87,6 +87,12 @@ func (s *Simulator) Run() error {
 	// They dispatch through hal.ChassisHAL, which we back with vmChassis below
 	// so each spec action maps to the corresponding KubeVirt ResourceManager API.
 	handlers.RegisterChassisHandlers(reg)
+	// Payload (§24) and SOL (§26) handlers serve `sol activate`/`sol deactivate`
+	// and the SOL configuration commands; they drive the console wired into the
+	// HAL in buildBMC. SOL payload data packets are not dispatched through this
+	// registry — the server hands them to the SOLStore directly.
+	handlers.RegisterPayloadHandlers(reg)
+	handlers.RegisterSOLHandlers(reg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
@@ -101,6 +107,12 @@ func (s *Simulator) Run() error {
 	}()
 
 	return nil
+}
+
+// LocalAddr returns the bound UDP address. It is only valid after Run has
+// succeeded; it lets callers that bind port 0 learn the assigned port.
+func (s *Simulator) LocalAddr() net.Addr {
+	return s.conn.LocalAddr()
 }
 
 // Stop gracefully shuts down the simulator: cancels the serve context, closes
@@ -143,8 +155,10 @@ func (s *Simulator) resolveGUID() [16]byte {
 
 // buildBMC constructs the in-memory BMC state: device identity, GUID, the
 // authenticated user account, and a HAL whose Chassis sub-interface is backed
-// by vmChassis (the KubeVirt ResourceManager adapter). go-ipmi's typed chassis
-// handlers dispatch through that HAL.
+// by vmChassis (the KubeVirt ResourceManager adapter) and whose Console
+// sub-interface is backed by vmConsoleHAL when a ResourceManager is present.
+// go-ipmi's typed chassis handlers dispatch through the former; the SOL
+// payload machinery drives the latter.
 func (s *Simulator) buildBMC() *bmc.BMC {
 	info := bmc.DeviceInfo{
 		DeviceID:                0x20,
@@ -160,7 +174,18 @@ func (s *Simulator) buildBMC() *bmc.BMC {
 	guid := s.resolveGUID()
 
 	chassis := loggingChassis{ChassisHAL: vmChassis{rm: s.rm}}
-	b := bmc.New(info, guid, noopHAL{chassis: chassis}, bmc.WithKG(nil))
+	halImpl := vmHAL{chassis: chassis}
+	if s.rm != nil {
+		// Wire the VM serial console into go-ipmi's SOL payload support
+		// (Activate Payload → hal.ConsoleHAL.Open → rm.OpenConsole).
+		halImpl.console = vmConsoleHAL{rm: s.rm}
+	}
+	b := bmc.New(info, guid, halImpl, bmc.WithKG(nil))
+
+	// A guest reboot drops the console websocket; let an active `sol activate`
+	// session re-attach on go-ipmi's default backoff (1s, ×2, cap 30s) instead
+	// of dying at the first boot — watching a reboot is the main SOL use case.
+	b.SOL.SetReconnectPolicy(&bmc.DefaultReconnectPolicy)
 
 	// Register the configured BMC user so RAKP username/password auth succeeds.
 	if s.username != "" {

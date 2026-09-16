@@ -3,6 +3,8 @@ package virtbmcagent
 import (
 	"context"
 	"fmt"
+	"io"
+	"regexp"
 	"strings"
 	"time"
 
@@ -334,6 +336,89 @@ var _ = Describe("Agent e2e", Ordered, func() {
 					"power soft after power on should succeed; stderr=%q", stderr)
 
 				waitForVMIDeleted(ctx, k8sClient, ns)
+			})
+		})
+
+		Context("SOL (Serial over LAN)", func() {
+			It("should answer sol info and log in to the guest over sol activate", func() {
+				By("ensuring the VM is powered on")
+				out, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "status"))
+				Expect(err).NotTo(HaveOccurred())
+				if strings.Contains(out, "is off") {
+					_, _, err := testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("power", "on"))
+					Expect(err).NotTo(HaveOccurred())
+				}
+
+				By("waiting for the guest agent (guest OS fully up)")
+				waitForVMIGuestAgent(ctx, k8sClient, ns)
+
+				By("reading the SOL configuration")
+				out, _, err = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("sol", "info"))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(out).To(ContainSubstring("Enabled"))
+
+				By("logging in to the guest over SOL and running date")
+				clientset, err := kubernetes.NewForConfig(config)
+				Expect(err).NotTo(HaveOccurred())
+
+				// The interaction is driven expect-style from the test: the
+				// pod runs a bare `ipmitool sol activate` on a streaming exec
+				// session, and each step asserts on the accumulated console
+				// output before sending the next input.
+				dateRe := regexp.MustCompile(`\d\d:\d\d:\d\d`)
+				Eventually(func(g Gomega) {
+					// A previous failed attempt may still own the payload; an
+					// error here just means nothing was active.
+					_, _, _ = testutil.RunIPMIInCluster(ctx, config, ns, ipmiReq("sol", "deactivate"))
+
+					sess, err := testutil.StartPodExec(ctx, config, clientset, testutil.ExecOptions{
+						Namespace:     ns,
+						PodName:       testutil.IPMIToolPodName,
+						ContainerName: "ipmitool",
+						Command: []string{
+							"ipmitool", "-I", "lanplus",
+							"-U", env.Username, "-P", env.Password, "-H", env.ServiceHost,
+							"sol", "activate",
+						},
+					})
+					g.Expect(err).NotTo(HaveOccurred())
+					defer func() { _ = sess.Stdin.Close() }()
+
+					console := newConsoleBuffer(sess.Stdout)
+					send := func(s string) {
+						_, err := io.WriteString(sess.Stdin, s)
+						g.Expect(err).NotTo(HaveOccurred())
+					}
+					expect := func(what string, timeout time.Duration) {
+						g.Eventually(console.String, timeout, 100*time.Millisecond).
+							Should(ContainSubstring(what), "console output so far: %s", console.String())
+					}
+
+					g.Eventually(console.String, 30*time.Second, 100*time.Millisecond).
+						Should(ContainSubstring("SOL Session operational"), "console output so far: %s", console.String())
+
+					// The guest agent already attests the OS is up; poking
+					// covers only the residual serial-getty startup gap.
+					g.Eventually(func() bool {
+						send("\r")
+						time.Sleep(2 * time.Second)
+						return strings.Contains(console.String(), "login:")
+					}, 30*time.Second, 5*time.Second).Should(BeTrue(), "console output so far: %s", console.String())
+
+					send("fedora\r")
+					expect("Password:", 15*time.Second)
+					send("fedora\r")
+					expect("$", 15*time.Second) // shell prompt
+					send("date\r")
+					// The echoed command contains no clock digits, so a
+					// hh:mm:ss pattern proves `date` actually ran.
+					g.Eventually(func() bool {
+						return dateRe.MatchString(console.String())
+					}, 15*time.Second, 100*time.Millisecond).Should(BeTrue(), "console output so far: %s", console.String())
+
+					send("~.") // SOL escape: terminate the session
+					g.Expect(sess.Wait()).To(Succeed())
+				}, 6*time.Minute, 45*time.Second).Should(Succeed())
 			})
 		})
 

@@ -9,7 +9,10 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
+	"strings"
+	"sync"
 	"time"
 
 	kvclient "kubevirt.io/client-go/kubevirt"
@@ -45,6 +48,7 @@ const (
 	// suiteInitTimeout covers container disk image pull during suite setup.
 	suiteInitTimeout     = 180 * time.Second
 	vmPowerStatusTimeout = 120 * time.Second
+	vmGuestAgentTimeout  = 3 * time.Minute
 
 	redfishClientPodName = util.RedfishClientPodName
 	ipmitoolPodName      = util.IPMIToolPodName
@@ -135,6 +139,26 @@ func waitForVMIRunning(ctx context.Context, k8sClient client.Client, namespace s
 		return isVMIPhase(ctx, k8sClient, namespace, agentVMName, kubevirtv1.Running)
 	}, vmPowerStatusTimeout, agentTestInterval).Should(BeTrue(),
 		"VMI %s/%s should reach Running phase", namespace, agentVMName)
+}
+
+// waitForVMIGuestAgent waits until the QEMU guest agent inside the VM
+// reports to virt-handler (VMI AgentConnected condition). The guest OS is
+// fully up at that point — unlike VMI Running, which only means the hypervisor
+// started the machine. The test-tooling image ships qemu-guest-agent.
+func waitForVMIGuestAgent(ctx context.Context, k8sClient client.Client, namespace string) {
+	Eventually(func() bool {
+		vmi := &kubevirtv1.VirtualMachineInstance{}
+		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: agentVMName}, vmi); err != nil {
+			return false
+		}
+		for _, cond := range vmi.Status.Conditions {
+			if cond.Type == kubevirtv1.VirtualMachineInstanceAgentConnected && cond.Status == corev1.ConditionTrue {
+				return true
+			}
+		}
+		return false
+	}, vmGuestAgentTimeout, agentTestInterval).Should(BeTrue(),
+		"guest agent in VMI %s/%s should connect (guest OS up)", namespace, agentVMName)
 }
 
 // waitForVMIPresentBeforeReady waits for the soft→on startup race window:
@@ -877,4 +901,30 @@ func triggerGuestReboot(ctx context.Context, cfg *rest.Config, k8sClient client.
 	err = virtClient.KubevirtV1().VirtualMachineInstances(namespace).SoftReboot(ctx, agentVMName)
 	// SoftReboot reports an error because the VMI is destroyed mid-call.
 	_ = err
+}
+
+// consoleBuffer accumulates an interactive exec session's output for
+// expect-style assertions. The copy goroutine ends when the session's
+// stdout closes.
+type consoleBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func newConsoleBuffer(r io.Reader) *consoleBuffer {
+	c := &consoleBuffer{}
+	go func() { _, _ = io.Copy(c, r) }()
+	return c
+}
+
+func (c *consoleBuffer) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Write(p)
+}
+
+func (c *consoleBuffer) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
 }

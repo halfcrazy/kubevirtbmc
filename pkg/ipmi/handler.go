@@ -9,22 +9,25 @@ import (
 	"kubevirt.io/kubevirtbmc/pkg/resourcemanager"
 )
 
-// noopHAL implements hal.HAL returning nil for every sub-interface except
-// Chassis, which is backed by vmChassis so go-ipmi's typed chassis handlers
-// (Chassis Control, Set/Get System Boot Options, Get Chassis Status) can drive
-// the KubeVirt ResourceManager through the typed HAL contract.
-type noopHAL struct {
+// vmHAL implements hal.HAL for the simulator: Chassis is backed by vmChassis
+// so go-ipmi's typed chassis handlers (Chassis Control, Set/Get System Boot
+// Options, Get Chassis Status) can drive the KubeVirt ResourceManager through
+// the typed HAL contract, and Console is backed by vmConsoleHAL so the SOL
+// payload (spec v2.0 §15) redirects the VM's serial console. The remaining
+// sub-interfaces are unsupported.
+type vmHAL struct {
 	chassis hal.ChassisHAL
+	console hal.ConsoleHAL
 }
 
-func (h noopHAL) Chassis() hal.ChassisHAL { return h.chassis }
-func (noopHAL) Sensors() hal.SensorHAL    { return nil }
-func (noopHAL) Storage() hal.StorageHAL   { return nil }
-func (noopHAL) Network() hal.NetworkHAL   { return nil }
-func (noopHAL) GPIO() hal.GPIOHAL         { return nil }
-func (noopHAL) I2C() hal.I2CHAL           { return nil }
-func (noopHAL) Console() hal.ConsoleHAL   { return nil }
-func (noopHAL) Close() error              { return nil }
+func (h vmHAL) Chassis() hal.ChassisHAL { return h.chassis }
+func (h vmHAL) Console() hal.ConsoleHAL { return h.console }
+func (vmHAL) Sensors() hal.SensorHAL    { return nil }
+func (vmHAL) Storage() hal.StorageHAL   { return nil }
+func (vmHAL) Network() hal.NetworkHAL   { return nil }
+func (vmHAL) GPIO() hal.GPIOHAL         { return nil }
+func (vmHAL) I2C() hal.I2CHAL           { return nil }
+func (vmHAL) Close() error              { return nil }
 
 // vmChassis implements hal.ChassisHAL by mapping the spec Table 28-3 chassis
 // actions and §28.12 Set System Boot Options onto KubeVirt ResourceManager

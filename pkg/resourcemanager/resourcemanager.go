@@ -2,6 +2,7 @@ package resourcemanager
 
 import (
 	"context"
+	"net"
 
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
 )
@@ -73,4 +74,8 @@ type ResourceManager interface {
 	GetSystemUUID(ctx context.Context) (string, error)
 	SetFirmwareMode(ctx context.Context, mode FirmwareMode) error
 	ClearBootOverrides(ctx context.Context) error
+
+	// OpenConsole attaches to the VM's serial console and returns its byte
+	// stream. At most one stream may be open at a time.
+	OpenConsole(ctx context.Context) (net.Conn, error)
 }

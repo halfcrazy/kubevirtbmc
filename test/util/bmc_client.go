@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -61,6 +62,60 @@ func ExecInPod(ctx context.Context, cfg *rest.Config, clientset *kubernetes.Clie
 		return outBuf.String(), errBuf.String(), fmt.Errorf("exec stream: %w", err)
 	}
 	return outBuf.String(), errBuf.String(), nil
+}
+
+// PodExecSession is an interactive exec session with streaming stdin/stdout,
+// for driving interactive commands (e.g. `ipmitool sol activate`) from the
+// test. Stderr is merged into Stdout.
+type PodExecSession struct {
+	Stdin  io.WriteCloser
+	Stdout io.Reader
+
+	wait func() error
+}
+
+// Wait blocks until the command exits. Close Stdin first to let commands
+// that terminate on EOF finish.
+func (s *PodExecSession) Wait() error { return s.wait() }
+
+// StartPodExec opens an interactive exec session in a pod. The command runs
+// until it exits or ctx is cancelled; Wait reports its exit error.
+func StartPodExec(ctx context.Context, cfg *rest.Config, clientset *kubernetes.Clientset, opts ExecOptions) (*PodExecSession, error) {
+	req := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Namespace(opts.Namespace).
+		Name(opts.PodName).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: opts.ContainerName,
+			Command:   opts.Command,
+			Stdin:     true,
+			Stdout:    true,
+			Stderr:    true,
+		}, kubescheme.ParameterCodec)
+
+	executor, err := remotecommand.NewSPDYExecutor(cfg, "POST", req.URL())
+	if err != nil {
+		return nil, fmt.Errorf("creating SPDY executor: %w", err)
+	}
+
+	stdinR, stdinW := io.Pipe()
+	outR, outW := io.Pipe()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- executor.StreamWithContext(ctx, remotecommand.StreamOptions{
+			Stdin:  stdinR,
+			Stdout: outW,
+			Stderr: outW,
+		})
+		_ = outW.Close()
+	}()
+
+	return &PodExecSession{
+		Stdin:  stdinW,
+		Stdout: outR,
+		wait:   func() error { return <-errCh },
+	}, nil
 }
 
 func CreateRedfishClientPod(ctx context.Context, clientset *kubernetes.Clientset, namespace string) error {

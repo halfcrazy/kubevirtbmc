@@ -3,6 +3,7 @@ package virtbmc
 import (
 	"context"
 	"fmt"
+	"net"
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
@@ -61,7 +62,22 @@ func NewVirtBMC(ctx context.Context, options Options, inCluster bool) (*VirtBMC,
 	if err != nil {
 		return nil, err
 	}
-	resourceManager := resourcemanager.NewVirtualMachineResourceManager(virtClient, cdiClient, bmcClient, bmcName)
+
+	// The console backend dials the VMI serial-console subresource — the same
+	// API behind `virtctl console` — through the kubecli client (the typed
+	// kubevirt client does not implement subresource streams).
+	kubecliClient := NewKubecliClient(options)
+	consoleOpener := func(ctx context.Context, namespace, name string) (net.Conn, error) {
+		stream, err := kubecliClient.VirtualMachineInstance(namespace).SerialConsole(name, nil)
+		if err != nil {
+			return nil, err
+		}
+		return stream.AsConn(), nil
+	}
+	resourceManager := resourcemanager.NewVirtualMachineResourceManager(
+		virtClient, cdiClient, bmcClient, bmcName,
+		resourcemanager.WithConsoleOpener(consoleOpener),
+	)
 
 	var ipmiSimulator *ipmi.Simulator
 	if options.EnableIPMI {

@@ -6,14 +6,14 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	cdiclient "kubevirt.io/client-go/containerizeddataimporter"
+	"kubevirt.io/client-go/kubecli"
 	kvclient "kubevirt.io/client-go/kubevirt"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
 )
 
-func NewVirtClient(options Options) kvclient.Interface {
-	// Build config
+func restConfig(options Options) *rest.Config {
 	config, err := clientcmd.BuildConfigFromFlags("", options.KubeconfigPath)
 	if err != nil {
 		// Fallback to in-cluster config
@@ -22,14 +22,28 @@ func NewVirtClient(options Options) kvclient.Interface {
 			panic(err)
 		}
 	}
+	return config
+}
 
+func NewVirtClient(options Options) kvclient.Interface {
 	// KubeVirt client
-	virtClient, err := kvclient.NewForConfig(config)
+	virtClient, err := kvclient.NewForConfig(restConfig(options))
 	if err != nil {
 		panic(err)
 	}
 
 	return virtClient
+}
+
+// NewKubecliClient returns the kubecli client, which (unlike the typed
+// kubevirt client) implements the VMI subresource streams — SerialConsole,
+// VNC — used by the console backend.
+func NewKubecliClient(options Options) kubecli.KubevirtClient {
+	c, err := kubecli.GetKubevirtClientFromRESTConfig(restConfig(options))
+	if err != nil {
+		panic(err)
+	}
+	return c
 }
 
 func NewCdiClient(options Options) *cdiclient.Clientset {

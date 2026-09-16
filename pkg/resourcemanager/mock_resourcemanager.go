@@ -11,6 +11,7 @@ package resourcemanager
 
 import (
 	context "context"
+	net "net"
 	reflect "reflect"
 
 	gomock "go.uber.org/mock/gomock"
@@ -214,6 +215,21 @@ func (m *MockResourceManager) InsertMedia(ctx context.Context, image string) err
 func (mr *MockResourceManagerMockRecorder) InsertMedia(ctx, image any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertMedia", reflect.TypeOf((*MockResourceManager)(nil).InsertMedia), ctx, image)
+}
+
+// OpenConsole mocks base method.
+func (m *MockResourceManager) OpenConsole(ctx context.Context) (net.Conn, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "OpenConsole", ctx)
+	ret0, _ := ret[0].(net.Conn)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// OpenConsole indicates an expected call of OpenConsole.
+func (mr *MockResourceManagerMockRecorder) OpenConsole(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "OpenConsole", reflect.TypeOf((*MockResourceManager)(nil).OpenConsole), ctx)
 }
 
 // PowerCycle mocks base method.
