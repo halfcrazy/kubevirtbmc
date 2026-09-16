@@ -1,0 +1,21 @@
+name: Metal3 Ironic Integration E2E (on demand)
+
+# Opt-in for PRs that don't touch the auto-trigger paths in metal3-e2e.yml:
+# a maintainer applies `need-metal3-e2e` and the suite runs on the PR's head
+# commit, then re-runs on every push while the label stays. Applying labels
+# requires triage permission or above, so the label itself is the
+# authorization — no extra checks needed here.
+#
+# Trigger-level filters can't match labels, so `synchronize` necessarily
+# starts this workflow on every push to every PR; unlabeled ones fail the
+# job-level `if` below and skip within seconds.
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+jobs:
+  metal3-e2e:
+    if: contains(github.event.pull_request.labels.*.name, 'need-metal3-e2e')
+    uses: ./.github/workflows/metal3-e2e.yml
+    permissions:
+      contents: read

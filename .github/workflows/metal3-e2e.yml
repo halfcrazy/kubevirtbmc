@@ -2,6 +2,7 @@ name: Metal3 Ironic Integration E2E
 
 on:
   workflow_dispatch:
+  workflow_call:
   push:
     branches:
       - main
@@ -13,6 +14,13 @@ on:
       - "hack/metal3-e2e/**"
       - "test/metal3-e2e/**"
       - ".github/workflows/metal3-e2e.yml"
+
+# PR runs cancel stale in-progress runs for the same PR (the suite takes
+# 40-70 min, so an outdated commit must not keep burning a runner);
+# branch/tag runs queue instead, so every merged commit keeps its own record.
+concurrency:
+  group: metal3-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   metal3-e2e:
