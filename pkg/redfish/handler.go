@@ -83,7 +83,7 @@ func (h *handler) GetServiceRoot() *server.ServiceRootV1161ServiceRoot {
 	return &server.ServiceRootV1161ServiceRoot{
 		OdataContext:   "/redfish/v1/$metadata#ServiceRoot.ServiceRoot",
 		OdataId:        "/redfish/v1",
-		OdataType:      "#ServiceRoot.v1_16_1.ServiceRoot",
+		OdataType:      "#ServiceRoot.v1_99_0.ServiceRoot",
 		Description:    "ServiceRoot",
 		Name:           "ServiceRoot",
 		RedfishVersion: "1.16.1",
