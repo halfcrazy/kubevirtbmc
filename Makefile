@@ -122,6 +122,10 @@ generate-redfish-api: ## Generate Redfish API server.
 redfish-interop: ## Run the Redfish Interop Validator locally against the fake-client interopserver.
 	./hack/redfish/run-interop.sh
 
+.PHONY: redfish-service-validate
+redfish-service-validate: ## Run the Redfish Service Validator locally against the fake-client interopserver.
+	./hack/redfish/run-service-validate.sh
+
 .PHONY: fmt
 fmt: ## Run go fmt against code.
 	go fmt ./...
